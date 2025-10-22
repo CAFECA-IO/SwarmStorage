@@ -82,7 +82,7 @@ export async function GET(
 
     // Info: (20251022 - Luphia) 加入檔案相關標頭
     headers.set('Content-Type', 'application/octet-stream');
-    headers.set('Content-Length', ipfsResponse.headers.get('Content-Length') || '');
+    headers.set('Transfer-Encoding', 'chunked');
 
     const downloadFilename = cid;
     const disposition = `attachment; filename="${downloadFilename}"`;
