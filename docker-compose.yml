@@ -6,9 +6,10 @@ services:
     container_name: swarm-storage-ipfs
     restart: unless-stopped
     ports:
-      - "4001:4001"       # Swarm port
-      - "5001:5001"       # API port
-      - "8080:8080"       # Gateway port
+      - "4001:4001" # Swarm port
+      - "4001:4001/udp" # Swarm port (QUIC)
+      - "5001:5001" # API port
+      - "8080:8080" # Gateway port
     volumes:
       - ipfs_data:/data/ipfs
       - ./swarm.key:/data/ipfs/swarm.key:ro
