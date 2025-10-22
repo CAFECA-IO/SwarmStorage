@@ -1,23 +1,34 @@
-version: '3.8'
-
 services:
-  ipfs-node:
-    image: ipfs/go-ipfs:latest
-    container_name: swarm-storage-ipfs
-    restart: unless-stopped
+  ipfs_bootstrap:
+    image: ipfs/kubo:latest
+    container_name: ipfs_bootstrap
     ports:
-      - "4001:4001" # Swarm port
-      - "4001:4001/udp" # Swarm port (QUIC)
-      - "5001:5001" # API port
-      - "8080:8080" # Gateway port
+      # API port (管理用)
+      - "5001:5001"
+      # Gateway port (可選, 用於 HTTP 存取)
+      - "8080:8080"
+      # Swarm port (TCP, 節點間通訊)
+      - "4001:4001/tcp"
+      # Swarm port (UDP, 用於 QUIC)
+      - "4001:4001/udp"
     volumes:
+      # 掛載 swarm.key 檔案以啟用私有網路 (PNet)
+      # - ./swarm.key:/data/ipfs/swarm.key
+      # 持久化 IPFS 資料
       - ipfs_data:/data/ipfs
-      - ./swarm.key:/data/ipfs/swarm.key:ro
+    networks:
+      - ipfs_net
     environment:
-      IPFS_PROFILE: server
-      IPFS_ROUTING_TYPE: dht
-      IPFS_AUTOTLS_ENABLED: "false"
-    command: daemon --migrate=true --enable-pubsub-experiment
+      # 強制節點只使用私有網路 (PNet)
+      # - LIBP2P_FORCE_PNET=1
+      # 設定為 'server' profile 適合在伺服器上運行的節點
+      - IPFS_PROFILE=server
 
+# Docker 網路定義
+networks:
+  ipfs_net:
+    driver: bridge
+
+# Docker 卷定義 (用於持久化)
 volumes:
-  ipfs_data:
+  ipfs_data: {}
