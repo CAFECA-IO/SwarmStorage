@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "tag": "beta",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "npm run lint && next dev",
+    "build": "npm run lint && next build",
+    "start": "npm run build && next start",
     "lint": "eslint",
-    "swarm": "next start -p 10014"
+    "swarm": "npm run build && next start -p 10014"
   },
   "dependencies": {
     "next": "16.0.8",

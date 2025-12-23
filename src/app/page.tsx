@@ -1,4 +1,3 @@
-// Info: (20251022 - Luphia) 用於測試我們的 IPFS 上傳和下載 API 路由的簡單頁面
 "use client";
 
 import { useState, FormEvent, ChangeEvent } from 'react';
