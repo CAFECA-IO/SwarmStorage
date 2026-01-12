@@ -19,6 +19,7 @@
 
 # production
 /build
+/room
 
 # misc
 .DS_Store

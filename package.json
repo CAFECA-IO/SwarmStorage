@@ -10,6 +10,7 @@
     "swarm": "npm run build && next start -p 10014"
   },
   "dependencies": {
+    "ethers": "^6.16.0",
     "next": "16.0.8",
     "react": "19.2.1",
     "react-dom": "19.2.1"
