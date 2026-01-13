@@ -136,9 +136,11 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
     <>
       {/* Info: (20260113 - Luphia) Room Indicator & Settings */}
       {roomNumber && (
-        <div className="flex flex-col items-start gap-4 px-2 mb-6">
-          <RoomNumberDisplay roomNumber={roomNumber} />
-          <RoomPasswordSetter roomNumber={roomNumber} />
+        <div className="flex flex-col gap-4 px-2 mb-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <RoomNumberDisplay roomNumber={roomNumber} />
+            <RoomPasswordSetter roomNumber={roomNumber} />
+          </div>
           <RoomRetentionSetter roomNumber={roomNumber} />
         </div>
       )}
@@ -150,8 +152,10 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
         className={`
                     border-2 border-dashed rounded-3xl p-8 mb-4 text-center cursor-pointer 
                     transition-all duration-300 ease-in-out transform  hover:shadow-lg group
-                    flex flex-col items-center justify-center min-h-[220px]
-                    ${dragActive ? 'border-blue-500 bg-blue-50 scale-[1.02] shadow-lg' : 'border-blue-300 hover:border-blue-400 bg-sky-50/50'}
+                    flex flex-col items-center justify-center min-h-[220px] relative overflow-hidden
+                    ${dragActive
+            ? 'border-blue-500/50 bg-blue-500/10 scale-[1.02] shadow-blue-500/10'
+            : 'border-white/10 hover:border-blue-500/30 bg-black/20 hover:bg-black/30'}
                 `}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
@@ -170,20 +174,21 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
         />
 
         {/* Info: (20260113 - Luphia) Icon Container with Particles */}
-        <div className="relative bg-white w-24 h-24 flex items-center justify-center rounded-full shadow-sm mb-4 transition-transform duration-300 group-hover:scale-110 group-hover:-translate-y-1 overflow-visible">
-          <CloudUploadIcon />
+        <div className="relative bg-white/5 backdrop-blur-md w-24 h-24 flex items-center justify-center rounded-full shadow-lg shadow-black/20 mb-4 transition-transform duration-300 group-hover:scale-110 group-hover:-translate-y-1 overflow-visible border border-white/10">
+          <CloudUploadIcon className="text-blue-400 w-10 h-10" />
 
           {/* Info: (20260113 - Luphia) Binary Particles */}
           <div className="absolute inset-0 flex justify-center items-end opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
             {PARTICLES.map((p, i) => (
               <span
                 key={i}
-                className="absolute text-[10px] font-mono font-bold text-blue-500 animate-float"
+                className="absolute text-[10px] font-mono font-bold text-blue-400 animate-float"
                 style={{
                   left: p.left,
                   bottom: '0',
                   animationDelay: p.delay,
-                  animationDuration: p.duration
+                  animationDuration: p.duration,
+                  textShadow: '0 0 5px rgba(59, 130, 246, 0.5)'
                 }}
               >
                 {p.char}
@@ -192,11 +197,11 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
           </div>
         </div>
 
-        <p className="text-slate-600 font-medium mb-1">Drag & drop or click to</p>
-        <p className="text-slate-600 font-medium">choose files</p>
+        <p className="text-slate-300 font-medium mb-1">Drag & drop or click to</p>
+        <p className="text-slate-400 text-sm">choose files</p>
       </div>
 
-      <div className="flex justify-between text-xs text-gray-400 px-1 mb-6 font-medium">
+      <div className="flex justify-between text-[10px] text-slate-500 px-1 mb-6 font-mono tracking-wider uppercase">
         <span>Supported Every File Formats</span>
         <span>Max: 4GB</span>
       </div>
@@ -204,18 +209,18 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
       {/* Info: (20260113 - Luphia) File List */}
       <div className="space-y-3">
         {files.map(file => (
-          <div key={file.id} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm relative group">
+          <div key={file.id} className="bg-black/20 backdrop-blur-sm rounded-2xl p-4 border border-white/5 shadow-sm relative group">
             <div className="flex items-start gap-4">
-              <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                <FileIcon name={file.file.name} />
+              <div className="bg-white/5 p-2.5 rounded-xl border border-white/5">
+                <FileIcon name={file.file.name} className="text-slate-300" />
               </div>
               <div className="flex-1 min-w-0">
                 <div className="flex justify-between items-start mb-1.5">
-                  <h4 className="text-sm font-bold text-slate-700 truncate pr-4">{file.file.name}</h4>
+                  <h4 className="text-sm font-bold text-slate-200 truncate pr-4">{file.file.name}</h4>
                   {file.status !== 'uploading' && (
                     <button
                       onClick={() => removeFile(file.id)}
-                      className="text-gray-300 hover:text-gray-500"
+                      className="text-slate-500 hover:text-red-400 transition-colors"
                       aria-label="Cancel upload"
                     >
                       <XIcon />
@@ -225,23 +230,23 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
 
                 {file.status === 'uploading' ? (
                   <div>
-                    <div className="flex justify-between text-xs text-gray-400 mb-1.5 font-medium">
+                    <div className="flex justify-between text-xs text-slate-400 mb-1.5 font-medium font-mono">
                       <span>{formatBytes(file.file.size)}</span>
                       <span>{Math.round(file.progress)}%</span>
                     </div>
-                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                    <div className="h-1 bg-white/10 rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-blue-500 rounded-full transition-all duration-300 ease-out"
+                        className="h-full bg-blue-500 rounded-full transition-all duration-300 ease-out shadow-[0_0_10px_rgba(59,130,246,0.5)]"
                         style={{ width: `${file.progress}%` }}
                       />
                     </div>
                   </div>
                 ) : file.status === 'completed' ? (
                   <div className="flex items-center justify-between mt-1">
-                    <span className="text-xs text-slate-400 font-medium">{formatBytes(file.file.size)}</span>
+                    <span className="text-xs text-slate-500 font-mono">{formatBytes(file.file.size)}</span>
                     <div className="flex gap-2 items-center">
                       {file.isDownloading ? (
-                        <span className="text-xs text-blue-500 font-medium">
+                        <span className="text-xs text-blue-400 font-medium animate-pulse">
                           {Math.round(file.downloadProgress || 0)}%
                         </span>
                       ) : (
@@ -279,7 +284,7 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
                               });
                             }
                           }}
-                          className="p-1.5 rounded-lg text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 transition-colors"
                           title="Download"
                           aria-label="Download file"
                         >
@@ -288,7 +293,7 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
                       )}
                       <button
                         onClick={() => removeFile(file.id)}
-                        className="p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors"
                         title="Remove"
                         aria-label="Remove file"
                       >
@@ -297,7 +302,7 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
                     </div>
                   </div>
                 ) : (
-                  <div className="text-xs text-red-500 mt-1 font-medium">
+                  <div className="text-xs text-red-400 mt-1 font-medium">
                     Upload failed
                   </div>
                 )}

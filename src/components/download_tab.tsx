@@ -44,19 +44,20 @@ export default function DownloadTab() {
   };
 
   return (
-    <div className="text-center py-12">
-      <p className="text-gray-400 mb-4 font-medium">Enter 6-digit Room Number</p>
+    <div className="text-center py-6">
+      <p className="text-slate-400 mb-6 font-mono text-xs uppercase tracking-widest">Enter 6-digit Room Number</p>
 
-      <div className="relative max-w-[200px] mx-auto mb-4">
+      <div className="relative max-w-[200px] mx-auto mb-6">
         <input
           type="text"
           maxLength={6}
           value={roomId}
           onChange={(e) => setRoomId(e.target.value)}
           onFocus={() => { setShowKeyboard(true); setActiveInput('room'); }}
-          placeholder="Room ID"
+          placeholder="000000"
+          inputMode="none"
           aria-label="Room ID input"
-          className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all font-mono text-center text-lg tracking-widest text-slate-700 placeholder:text-base placeholder:tracking-normal placeholder:font-sans"
+          className="w-full px-4 py-4 bg-black/20 border border-white/10 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-transparent transition-all font-mono text-center text-2xl tracking-[0.5em] text-white placeholder:text-slate-700 placeholder:tracking-widest shadow-inner shadow-black/20"
           onKeyDown={(e) => {
             if (e.key === 'Enter') handleEntry();
           }}
@@ -66,9 +67,9 @@ export default function DownloadTab() {
       <button
         onClick={handleEntry}
         disabled={isLoading || roomId.length !== 6}
-        className="mt-6 px-6 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-xl font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        className="w-full px-6 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white rounded-xl font-bold uppercase tracking-wider text-sm transition-all shadow-lg shadow-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-blue-500/40 active:scale-[0.98]"
       >
-        {isLoading ? 'Loading...' : 'View Files'}
+        {isLoading ? 'Accessing...' : 'Enter Room'}
       </button>
 
       {showKeyboard && (
@@ -78,7 +79,9 @@ export default function DownloadTab() {
           onEnter={handleEntry}
           onClose={() => setShowKeyboard(false)}
           mode={activeInput === 'room' ? 'numeric' : 'full'}
-          position="relative"
+          position="fixed"
+          value={roomId}
+          label="Room ID"
         />
       )}
     </div>

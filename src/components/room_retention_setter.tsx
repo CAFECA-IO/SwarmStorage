@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { ClockIcon } from '@/components/icons';
+import { ClockIcon, CoinIcon } from '@/components/icons';
 
 interface IRoomRetentionSetterProps {
   roomNumber: string;
@@ -7,6 +7,7 @@ interface IRoomRetentionSetterProps {
 
 export default function RoomRetentionSetter({ roomNumber }: IRoomRetentionSetterProps) {
   const [retention, setRetention] = useState<number>(10); // Default 10m
+  const [enablePaid, setEnablePaid] = useState(false);
 
   // Info: (20260113 - Luphia) Check if retention is initialized
   const initialized = useRef(false);
@@ -48,11 +49,11 @@ export default function RoomRetentionSetter({ roomNumber }: IRoomRetentionSetter
   }, [roomNumber]);
 
   return (
-    <div className="flex items-center gap-3 bg-white border border-slate-100 rounded-full px-4 py-1.5 shadow-sm h-9">
-      <div className="text-slate-400 flex items-center">
+    <div className="flex items-center gap-3 bg-black/20 backdrop-blur-sm border border-white/10 rounded-full px-4 py-1.5 shadow-inner shadow-black/20 h-9">
+      <div className="text-slate-500 flex items-center">
         <ClockIcon />
       </div>
-      <div className="h-4 w-px bg-slate-100"></div>
+      <div className="h-4 w-px bg-white/10"></div>
       <div className="flex items-center gap-1">
         {[10, 60, 1440].map((m) => (
           <button
@@ -61,14 +62,30 @@ export default function RoomRetentionSetter({ roomNumber }: IRoomRetentionSetter
             className={`
                 text-xs font-bold px-3 py-1 rounded-full transition-all duration-200
                 ${retention === m
-                ? 'bg-blue-500 text-white shadow-blue-500/20 shadow-md scale-105'
-                : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'}
+                ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.4)] shadow-md scale-105'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}
               `}
           >
             {m === 10 ? '10m' : m === 60 ? '1h' : '1d'}
           </button>
         ))}
       </div>
+      <div className="h-4 w-px bg-white/10 mx-1"></div>
+
+      {/* Info: (20260113 - Luphia) Paid Purchase Toggle */}
+      <button
+        onClick={() => setEnablePaid(!enablePaid)}
+        className={`
+          flex items-center gap-1.5 px-3 py-1 rounded-full transition-all duration-300 border
+          ${enablePaid
+            ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
+            : 'bg-transparent text-slate-500 border-transparent hover:text-slate-300 hover:bg-white/5'}
+        `}
+        title="Allow paid access after expiration"
+      >
+        <CoinIcon className={enablePaid ? "text-emerald-400" : "text-slate-500"} />
+        <span className="text-[10px] font-bold uppercase tracking-wider">{enablePaid ? 'Paid' : 'Free'}</span>
+      </button>
     </div>
   );
 }

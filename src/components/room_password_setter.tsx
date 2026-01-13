@@ -75,18 +75,18 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
 
   return (
     <>
-      <div className="relative h-9 flex items-center">
+      <div className="relative h-9 flex items-center no-select">
         {/* Info: (20260113 - Luphia) Toggle Button */}
         <button
           onClick={() => setShowPasswordInput(true)}
           className={`
             flex items-center gap-2 px-3 py-1.5 rounded-full
-            text-xs font-bold tracking-wide transition-all duration-300
+            text-xs font-bold tracking-wide transition-all duration-300 border
             ${showPasswordInput
               ? 'opacity-0 pointer-events-none translate-x-4 absolute'
               : isLocked
-                ? 'bg-emerald-50 text-emerald-600 shadow-sm border border-emerald-100 opacity-100 translate-x-0'
-                : 'bg-white text-slate-500 hover:text-blue-500 hover:bg-blue-50 shadow-sm border border-slate-100 opacity-100 translate-x-0'
+                ? 'bg-emerald-500/10 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)] border-emerald-500/20 opacity-100 translate-x-0 backdrop-blur-sm'
+                : 'bg-black/20 text-slate-400 hover:text-blue-400 hover:bg-white/5 shadow-sm border-white/5 hover:border-blue-500/30 opacity-100 translate-x-0 backdrop-blur-sm'
             }
           `}
         >
@@ -104,20 +104,21 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
             }
            `}
         >
-          <div className="flex items-center bg-white rounded-full border border-slate-200 shadow-sm pl-3 p-1">
-            <div className="text-slate-400"><LockIcon /></div>
+          <div className="flex items-center bg-black/40 backdrop-blur-md rounded-full border border-white/10 shadow-lg pl-3 p-1">
+            <div className="text-slate-500"><LockIcon /></div>
             <input
               type="text"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               onFocus={() => setShowKeyboard(true)}
               placeholder="******"
-              className="w-24 px-2 py-1 text-xs bg-transparent outline-none font-mono text-slate-600 tracking-widest placeholder:tracking-normal"
+              inputMode="none"
+              className="w-24 px-2 py-1 text-xs bg-transparent outline-none font-mono text-white tracking-widest placeholder:tracking-normal placeholder:text-slate-600"
               aria-label="Room Password"
             />
             <button
               onClick={handleSetPassword}
-              className="bg-blue-500 text-white rounded-full px-4 py-1.5 text-xs font-bold hover:bg-blue-600 transition-colors shadow-blue-500/20 shadow-md"
+              className="bg-blue-600 text-white rounded-full px-4 py-1.5 text-xs font-bold hover:bg-blue-500 transition-all shadow-[0_0_10px_rgba(37,99,235,0.3)] shadow-md"
             >
               {isLocked ? 'Update' : 'Save'}
             </button>
@@ -125,7 +126,7 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
             {isLocked && (
               <button
                 onClick={() => setShowConfirm(true)}
-                className="ml-1 p-1.5 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors"
+                className="ml-1 p-1.5 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-full transition-colors"
                 title="Remove Password"
               >
                 <TrashIcon />
@@ -137,7 +138,7 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
                 setShowPasswordInput(false);
                 setShowKeyboard(false);
               }}
-              className="ml-1 p-1.5 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors"
+              className="ml-1 p-1.5 text-slate-500 hover:text-slate-300 hover:bg-white/5 rounded-full transition-colors"
             >
               <XIcon />
             </button>
@@ -162,7 +163,9 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
           onEnter={handleSetPassword}
           onClose={() => setShowKeyboard(false)}
           mode="full"
-          position="relative"
+          position="fixed"
+          value={password}
+          label="Set Password"
         />
       )}
     </>
