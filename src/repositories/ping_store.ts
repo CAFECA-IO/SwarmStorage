@@ -31,3 +31,7 @@ export const addLog = (log: IPingLog) => {
 export const getLogs = () => {
   return requestLogs;
 };
+
+export const clearLogs = () => {
+  requestLogs.splice(0, requestLogs.length);
+};

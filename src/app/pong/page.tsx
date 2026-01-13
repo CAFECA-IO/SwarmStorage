@@ -2,10 +2,13 @@
 
 import { useState, useEffect } from 'react';
 import { IPingLog } from '@/repositories/ping_store';
+import ConfirmDialog from '@/components/confirm_dialog';
 
 export default function PongPage() {
   const [logs, setLogs] = useState<IPingLog[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   const fetchLogs = async () => {
     try {
@@ -19,6 +22,12 @@ export default function PongPage() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleClearLogs = async () => {
+    await fetch('/api/v1/pong', { method: 'DELETE' });
+    fetchLogs();
+    setShowClearConfirm(false);
   };
 
   useEffect(() => {
@@ -47,8 +56,25 @@ export default function PongPage() {
             >
               Refresh
             </button>
+            <button
+              onClick={() => setShowClearConfirm(true)}
+              className="bg-red-500/10 hover:bg-red-500/20 text-red-400 px-4 py-2 rounded-lg text-sm font-bold border border-red-500/20 transition-colors"
+            >
+              Clean
+            </button>
           </div>
         </header>
+
+        <ConfirmDialog
+          isOpen={showClearConfirm}
+          title="Clear Logs"
+          description="Are you sure you want to clear all logs? This action cannot be undone."
+          confirmText="Clear All"
+          cancelText="Cancel"
+          type="danger"
+          onConfirm={handleClearLogs}
+          onCancel={() => setShowClearConfirm(false)}
+        />
 
         {loading && logs.length === 0 ? (
           <div className="text-center text-slate-500 py-12 animate-pulse font-mono">

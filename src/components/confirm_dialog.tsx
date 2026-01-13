@@ -26,7 +26,7 @@ export default function ConfirmDialog({
     <div className={`fixed inset-0 z-50 flex items-center justify-center p-4 transition-opacity duration-300 ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
       {/* Info: (20260113 - Luphia) Backdrop */}
       <div
-        className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onCancel}
         role="button"
         tabIndex={0}
@@ -36,31 +36,34 @@ export default function ConfirmDialog({
 
       {/* Info: (20260113 - Luphia) Modal */}
       <div className={`
-        bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl z-10 
-        transform transition-all duration-300
+        bg-black/80 backdrop-blur-xl border border-white/10 rounded-3xl w-full max-w-sm p-6 shadow-2xl shadow-emerald-500/5 z-10 
+        transform transition-all duration-300 relative overflow-hidden
         ${isOpen ? 'scale-100 translate-y-0' : 'scale-95 translate-y-4'}
       `}>
-        <h3 className={`text-lg font-bold mb-2 ${type === 'danger' ? 'text-red-600' : 'text-slate-800'}`}>
+        {/* Info: (20260113 - Luphia) Decorative Glow */}
+        <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 via-emerald-500 to-purple-500 opacity-50"></div>
+
+        <h3 className={`text-lg font-bold font-mono mb-2 ${type === 'danger' ? 'text-red-400' : 'text-slate-100'}`}>
           {title}
         </h3>
-        <p className="text-slate-500 mb-6 text-sm leading-relaxed">
+        <p className="text-slate-400 mb-8 text-sm leading-relaxed font-sans">
           {description}
         </p>
 
         <div className="flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-slate-600 font-bold hover:bg-slate-50 transition-colors text-sm"
+            className="flex-1 px-4 py-2.5 rounded-xl border border-white/10 text-slate-300 font-bold font-mono hover:bg-white/5 transition-colors text-xs uppercase tracking-wider"
           >
             {cancelText}
           </button>
           <button
             onClick={onConfirm}
             className={`
-              flex-1 px-4 py-2.5 rounded-xl text-white font-bold transition-colors shadow-lg text-sm
+              flex-1 px-4 py-2.5 rounded-xl font-bold transition-all shadow-lg text-xs uppercase tracking-wider font-mono border
               ${type === 'danger'
-                ? 'bg-red-500 hover:bg-red-600 shadow-red-500/30'
-                : 'bg-blue-500 hover:bg-blue-600 shadow-blue-500/30'}
+                ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/30 shadow-red-500/10 hover:shadow-red-500/20'
+                : 'bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border-cyan-500/30 shadow-cyan-500/10 hover:shadow-cyan-500/20'}
             `}
           >
             {confirmText}
