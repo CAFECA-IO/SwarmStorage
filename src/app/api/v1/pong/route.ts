@@ -1,21 +1,12 @@
-import { NextResponse } from 'next/server';
-import { getLogs } from '@/repositories/ping_store';
+import { getLogs, clearLogs } from '@/repositories/ping_store';
+import { jsonOk } from '@/lib/response';
 
 export async function GET() {
   const logs = getLogs();
-  return NextResponse.json({
-    code: 'OK',
-    payload: logs,
-    count: logs.length
-  });
+  return jsonOk(logs);
 }
-
-import { clearLogs } from '@/repositories/ping_store';
 
 export async function DELETE() {
   clearLogs();
-  return NextResponse.json({
-    code: 'OK',
-    message: 'Logs cleared'
-  });
+  return jsonOk(null, 'Logs cleared');
 }

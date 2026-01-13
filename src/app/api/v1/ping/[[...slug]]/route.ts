@@ -1,5 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { addLog, IPingLog } from '@/repositories/ping_store';
+import { jsonOk } from '@/lib/response';
 
 async function handler(req: NextRequest, { params }: { params: Promise<{ slug?: string[] }> }) {
   const timestamp = new Date().toISOString();
@@ -49,7 +50,7 @@ async function handler(req: NextRequest, { params }: { params: Promise<{ slug?: 
 
   addLog(log);
 
-  return NextResponse.json({ code: 'OK', message: 'Pong', timestamp });
+  return jsonOk({ message: 'Pong', timestamp });
 }
 
 export const GET = handler;
