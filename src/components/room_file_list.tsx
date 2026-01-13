@@ -85,11 +85,12 @@ export default function RoomFileList({ roomId, initialData, initialPassword, onE
   const isImage = (filename: string) => ['png', 'jpg', 'jpeg'].includes(getExtension(filename));
   const isVideo = (filename: string) => ['mp4', 'mov', 'm3u8'].includes(getExtension(filename));
   const isAudio = (filename: string) => ['mp3'].includes(getExtension(filename));
-  const isMedia = (filename: string) => isImage(filename) || isVideo(filename) || isAudio(filename);
+  const isPdf = (filename: string) => ['pdf'].includes(getExtension(filename));
+  const isMedia = (filename: string) => isImage(filename) || isVideo(filename) || isAudio(filename) || isPdf(filename);
 
   const shouldAutoPreview = (file: ILariaMetadata) => {
     const ext = getExtension(file.filename);
-    const supported = ['png', 'jpg', 'jpeg', 'mp4', 'mov', 'mp3', 'm3u8'].includes(ext);
+    const supported = ['png', 'jpg', 'jpeg', 'mp4', 'mov', 'mp3', 'm3u8', 'pdf'].includes(ext);
     // Info: (20260113 - Luphia) Limit auto-load to 50MB
     const sizeLimit = 50 * 1024 * 1024;
     return supported && file.originalFileSize < sizeLimit;
@@ -199,7 +200,7 @@ export default function RoomFileList({ roomId, initialData, initialPassword, onE
       }
 
       const ext = getExtension(file.filename);
-      const supported = ['png', 'jpg', 'jpeg', 'mp4', 'mov', 'mp3', 'm3u8'].includes(ext);
+      const supported = ['png', 'jpg', 'jpeg', 'mp4', 'mov', 'mp3', 'm3u8', 'pdf'].includes(ext);
       if (supported) {
         return (
           <button
@@ -253,6 +254,15 @@ export default function RoomFileList({ roomId, initialData, initialPassword, onE
         />
       );
     }
+    if (isPdf(file.filename)) {
+      return (
+        <iframe
+          src={`${url}#toolbar=0`}
+          className="mt-2 rounded-lg w-full h-[600px] bg-white border border-white/10"
+          title={`PDF preview for ${file.filename}`}
+        />
+      );
+    }
     return null;
   };
 
@@ -260,25 +270,25 @@ export default function RoomFileList({ roomId, initialData, initialPassword, onE
     <div>
       {/* Info: (20260113 - Luphia) Password Modal */}
       {showPasswordModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-fade-in relative overflow-hidden">
-            <h3 className="text-lg font-bold text-slate-700 mb-2">Password Required</h3>
-            <p className="text-sm text-slate-500 mb-4">This room is protected.</p>
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900/90 border border-white/10 rounded-2xl w-full max-w-sm p-6 shadow-2xl animate-fade-in relative overflow-hidden">
+            <h3 className="text-lg font-bold text-slate-100 mb-2">Password Required</h3>
+            <p className="text-sm text-slate-400 mb-4">This room is protected.</p>
 
-            <div className="bg-slate-50 rounded-xl p-3 mb-4 border border-slate-200">
+            <div className="bg-black/40 rounded-xl p-3 mb-4 border border-white/10">
               <input
                 type="password"
                 value={roomPassword}
                 readOnly
                 placeholder="******"
-                className="w-full bg-transparent text-center text-2xl font-mono tracking-widest outline-none text-slate-700"
+                className="w-full bg-transparent text-center text-2xl font-mono tracking-widest outline-none text-white placeholder:text-slate-600"
                 onFocus={() => setShowKeyboard(true)}
                 aria-label="Enter Password"
               />
             </div>
 
             {passwordError && (
-              <p className="text-xs text-red-500 text-center mb-4 font-bold">{passwordError}</p>
+              <p className="text-xs text-red-400 text-center mb-4 font-bold">{passwordError}</p>
             )}
 
             <div className="flex gap-2">
@@ -287,13 +297,13 @@ export default function RoomFileList({ roomId, initialData, initialPassword, onE
                   if (onExit) onExit();
                   else router.push('/');
                 }}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-500 font-bold hover:bg-slate-50 transition-colors"
+                className="flex-1 py-2.5 rounded-xl border border-white/10 text-slate-400 font-bold hover:bg-white/5 transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={handlePasswordSubmit}
-                className="flex-1 py-2.5 rounded-xl bg-blue-500 text-white font-bold hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/30"
+                className="flex-1 py-2.5 rounded-xl bg-blue-600 text-white font-bold hover:bg-blue-500 transition-colors shadow-lg shadow-blue-500/30"
               >
                 Unlock
               </button>
@@ -307,65 +317,68 @@ export default function RoomFileList({ roomId, initialData, initialPassword, onE
               onEnter={handlePasswordSubmit}
               onClose={() => setShowKeyboard(false)}
               mode="full"
+              position="fixed"
+              value={roomPassword}
+              label="Enter Password"
             />
           )}
         </div>
       )}
 
-      <div className="flex justify-between items-center mb-4 px-1">
-        <h3 className="text-sm font-bold text-slate-700">Room #{roomId}</h3>
+      <div className="flex justify-between items-center mb-6 px-1 border-b border-white/10 pb-4">
+        <h3 className="text-sm font-bold text-slate-300 font-mono tracking-wider uppercase">Room #{roomId}</h3>
         <button
           onClick={onExit ? onExit : () => router.push('/')}
-          className="text-xs text-blue-500 hover:text-blue-600 font-medium"
+          className="text-xs text-blue-400 hover:text-blue-300 font-medium tracking-wide uppercase"
         >
           Exit Room
         </button>
       </div>
 
       {errorHeader && (
-        <div className="mb-4 bg-red-50 text-red-500 text-xs py-2 px-4 rounded-lg inline-block animate-fade-in">
+        <div className="mb-4 bg-red-500/10 border border-red-500/20 text-red-400 text-xs py-2 px-4 rounded-lg inline-block animate-fade-in font-mono">
           {errorHeader}
         </div>
       )}
 
       <div className="space-y-3">
         {isLoading && !fileList && (
-          <div className="text-center py-8 text-gray-400 text-sm">Loading...</div>
+          <div className="text-center py-12 text-slate-500 text-sm font-mono animate-pulse">Scanning Blocks...</div>
         )}
 
         {fileList && fileList.length === 0 ? (
-          <div className="text-center py-8 text-gray-400 text-sm">No files in this room</div>
+          <div className="text-center py-12 text-slate-500 text-sm font-mono">No files found in this block</div>
         ) : (
           fileList?.map((file, idx) => (
-            <div key={idx} className="bg-white rounded-2xl p-4 border border-slate-100 shadow-sm flex flex-col gap-2">
+            <div key={idx} className="bg-black/20 backdrop-blur-sm rounded-2xl p-4 border border-white/5 shadow-sm flex flex-col gap-2 hover:bg-black/30 transition-colors group">
               <div className="flex items-center gap-4 w-full">
-                <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 shrink-0">
-                  <FileIcon name={file.filename} />
+                <div className="bg-white/5 p-2.5 rounded-xl border border-white/5 shrink-0 group-hover:border-white/10 transition-colors">
+                  <FileIcon name={file.filename} className="text-slate-300" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center mb-1">
-                    <h4 className="text-sm font-bold text-slate-700 truncate">{file.filename}</h4>
-                    <span className="text-xs text-slate-400 shrink-0 ml-2">{formatBytes(file.originalFileSize)}</span>
+                    <h4 className="text-sm font-bold text-slate-200 truncate font-sans">{file.filename}</h4>
+                    <span className="text-[10px] text-slate-500 shrink-0 ml-2 font-mono">{formatBytes(file.originalFileSize)}</span>
                   </div>
 
                   {downloadingFile === file.filename ? (
                     <div className="mt-2">
-                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-1 bg-white/10 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-blue-500 rounded-full transition-all duration-300"
+                          className="h-full bg-blue-500 rounded-full transition-all duration-300 shadow-[0_0_8px_rgba(59,130,246,0.6)]"
                           style={{ width: `${progress}%` }}
                         />
                       </div>
-                      <p className="text-[10px] text-blue-500 mt-1 text-right">{Math.round(progress)}%</p>
+                      <p className="text-[10px] text-blue-400 mt-1 text-right font-mono">{Math.round(progress)}%</p>
                     </div>
                   ) : (
                     // Info: (20260113 - Luphia) Hide download button for media files
                     !isMedia(file.filename) && (
                       <button
                         onClick={() => handleDownload(file)}
-                        className="w-full mt-2 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 text-blue-500 hover:bg-blue-100 transition-colors flex items-center justify-center gap-2"
+                        className="w-full mt-2 py-1.5 rounded-lg text-xs font-bold bg-white/5 text-slate-300 hover:bg-blue-600 hover:text-white transition-all flex items-center justify-center gap-2 border border-white/5 hover:border-blue-500/50 hover:shadow-[0_0_10px_rgba(37,99,235,0.3)]"
                       >
-                        <DownloadIcon /> Download
+                        <DownloadIcon className="w-3 h-3" /> Download
                       </button>
                     )
                   )}
