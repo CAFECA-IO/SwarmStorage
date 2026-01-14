@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00f0ff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#00ff9d;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  <!-- Background Hexagon -->
+  <path d="M256 48 L464 168 L464 344 L256 464 L48 344 L48 168 Z" fill="#0a192f" stroke="url(#grad1)" stroke-width="16" />
+  
+  <!-- Internal Connections (Carbon Structure) -->
+  <path d="M256 48 L256 256" stroke="url(#grad1)" stroke-width="12" />
+  <path d="M464 168 L256 256" stroke="url(#grad1)" stroke-width="12" />
+  <path d="M48 168 L256 256" stroke="url(#grad1)" stroke-width="12" />
+  
+  <!-- Central Node -->
+  <circle cx="256" cy="256" r="40" fill="url(#grad1)" />
+  
+  <!-- Vertex Nodes -->
+  <circle cx="256" cy="48" r="24" fill="url(#grad1)" />
+  <circle cx="464" cy="168" r="24" fill="url(#grad1)" />
+  <circle cx="464" cy="344" r="24" fill="url(#grad1)" />
+  <circle cx="256" cy="464" r="24" fill="url(#grad1)" />
+  <circle cx="48" cy="344" r="24" fill="url(#grad1)" />
+  <circle cx="48" cy="168" r="24" fill="url(#grad1)" />
+</svg>
