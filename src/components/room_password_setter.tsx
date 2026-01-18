@@ -85,8 +85,8 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
             ${showPasswordInput
               ? 'opacity-0 pointer-events-none translate-x-4 absolute'
               : isLocked
-                ? 'bg-emerald-500/10 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)] border-emerald-500/20 opacity-100 translate-x-0 backdrop-blur-sm'
-                : 'bg-black/20 text-slate-400 hover:text-blue-400 hover:bg-white/5 shadow-sm border-white/5 hover:border-blue-500/30 opacity-100 translate-x-0 backdrop-blur-sm'
+                ? 'bg-emerald-500/10 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.2)] border-emerald-500/20 opacity-100 translate-x-0 relative backdrop-blur-sm'
+                : 'bg-black/20 text-slate-400 hover:text-blue-400 hover:bg-white/5 shadow-sm border-white/5 hover:border-blue-500/30 opacity-100 translate-x-0 relative backdrop-blur-sm'
             }
           `}
         >
@@ -97,10 +97,10 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
         {/* Info: (20260113 - Luphia) Input Field */}
         <div
           className={`
-             absolute left-0 flex items-center gap-1 transition-all duration-300
+             left-0 flex items-center gap-1 transition-all duration-300
              ${showPasswordInput
-              ? 'opacity-100 translate-x-0'
-              : 'opacity-0 pointer-events-none -translate-x-4'
+              ? 'opacity-100 translate-x-0 relative'
+              : 'opacity-0 pointer-events-none -translate-x-4 absolute'
             }
            `}
         >
@@ -113,7 +113,7 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
               onFocus={() => setShowKeyboard(true)}
               placeholder="******"
               inputMode="none"
-              className="w-24 px-2 py-1 text-xs bg-transparent outline-none font-mono text-white tracking-widest placeholder:tracking-normal placeholder:text-slate-600"
+              className="w-32 px-2 py-1 text-base bg-transparent outline-none font-mono text-white tracking-widest placeholder:tracking-normal placeholder:text-slate-600"
               aria-label="Room Password"
             />
             <button
