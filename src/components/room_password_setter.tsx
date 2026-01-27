@@ -104,7 +104,7 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
             }
            `}
         >
-          <div className="flex items-center bg-black/40 backdrop-blur-md rounded-full border border-white/10 shadow-lg pl-3 p-1">
+          <div className="flex items-center bg-black/40 backdrop-blur-md rounded-full border border-white/10 shadow-lg pl-2 sm:pl-3 p-1">
             <div className="text-slate-500"><LockIcon /></div>
             <input
               type="text"
@@ -113,12 +113,12 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
               onFocus={() => setShowKeyboard(true)}
               placeholder="******"
               inputMode="none"
-              className="w-32 px-2 py-1 text-base bg-transparent outline-none font-mono text-white tracking-widest placeholder:tracking-normal placeholder:text-slate-600"
+              className="w-24 sm:w-32 px-2 py-1 text-base bg-transparent outline-none font-mono text-white tracking-widest placeholder:tracking-normal placeholder:text-slate-600"
               aria-label="Room Password"
             />
             <button
               onClick={handleSetPassword}
-              className="bg-blue-600 text-white rounded-full px-4 py-1.5 text-xs font-bold hover:bg-blue-500 transition-all shadow-[0_0_10px_rgba(37,99,235,0.3)] shadow-md"
+              className="bg-blue-600 text-white rounded-full px-3 sm:px-4 py-1.5 text-xs font-bold hover:bg-blue-500 transition-all shadow-[0_0_10px_rgba(37,99,235,0.3)] shadow-md"
             >
               {isLocked ? 'Update' : 'Save'}
             </button>
