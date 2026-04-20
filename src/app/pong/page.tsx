@@ -31,7 +31,10 @@ export default function PongPage() {
   };
 
   useEffect(() => {
-    fetchLogs();
+    const initLogs = async () => {
+      await fetchLogs();
+    };
+    initLogs();
     const interval = setInterval(fetchLogs, 10000); // Info: (20260113 - Luphia) Auto-refresh
     return () => clearInterval(interval);
   }, []);

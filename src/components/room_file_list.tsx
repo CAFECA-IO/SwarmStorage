@@ -68,7 +68,10 @@ export default function RoomFileList({ roomId, initialData, initialPassword, onE
 
   useEffect(() => {
     if (!initialData) {
-      fetchRoomFiles(initialPassword);
+      const initFiles = async () => {
+        await fetchRoomFiles(initialPassword);
+      };
+      initFiles();
     }
   }, [roomId, initialData, initialPassword, fetchRoomFiles]);
 
