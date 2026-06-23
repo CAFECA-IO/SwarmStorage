@@ -55,7 +55,7 @@ export default function RoomRetentionSetter({ roomNumber }: IRoomRetentionSetter
       </div>
       <div className="h-4 w-px bg-white/10"></div>
       <div className="flex items-center gap-1">
-        {[10, 60, 1440].map((m) => (
+        {[10, 60, 1440, 10080].map((m) => (
           <button
             key={m}
             onClick={() => handleSetRetention(m)}
@@ -66,7 +66,7 @@ export default function RoomRetentionSetter({ roomNumber }: IRoomRetentionSetter
                 : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'}
               `}
           >
-            {m === 10 ? '10m' : m === 60 ? '1h' : '1d'}
+            {m === 10 ? '10m' : m === 60 ? '1h' : m === 1440 ? '1d' : '1w'}
           </button>
         ))}
       </div>
