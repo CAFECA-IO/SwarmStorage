@@ -17,20 +17,59 @@ SwarmStorage is a decentralized, private storage solution designed for secure an
 
 ## Laria Engine
 
-Laria is the core storage engine powering SwarmStorage. It handles the complexity of file splitting, encryption, and reconstruction.
+Laria ([`src/lib/laria.ts`](src/lib/laria.ts)) is the core storage engine powering SwarmStorage. It encrypts a file, splits it into erasure-coded shards, and rebuilds it from any 5 of the 8 shards. All processing is streamed, so memory use stays constant (one 20 MB stripe plus three 4 MB parity buffers) regardless of file size.
 
 ### How it Works
 
-1.  **Encryption & Padding**: Files are encrypted and padded to ensure the total size is a multiple of **4 MB** (Atomic Shard Size).
-2.  **Sharding (Reed-Solomon 8, 5)**:
-    - The data is split into **20 MB** stripes (Data Stripe Size).
-    - Each stripe is divided into **5 data shards** and **3 parity shards** using Reed-Solomon (8, 5) erasure coding.
-    - Each shard is **4 MB** in size.
-3.  **Distribution**: The 8 shards are distributed to different storage nodes in the network.
-4.  **Metadata**: A metadata file is generated containing file info and shard locations, which is then stored in the warehouse.
+1.  **Encryption**: The file is encrypted with **AES-256-GCM** as a stream. A random 256-bit key is generated per file (or supplied by the caller) and returned to the caller — it is **never** written to the metadata. The 96-bit IV and 128-bit authentication tag are stored in the metadata. The ciphertext has the same length as the original file.
+2.  **Striping & Padding**: The ciphertext is cut into **20 MB** stripes (Data Stripe Size). The last stripe is zero-padded to 20 MB; the padding is trimmed on recovery using `originalFileSize`.
+3.  **Sharding (Reed-Solomon 8, 5)**:
+    - Each stripe is divided into **5 data shards** of **4 MB** (Atomic Shard Size).
+    - **3 parity shards** are computed with Reed-Solomon (8, 5) erasure coding over GF(2⁸) ([`src/lib/reed_solomon_erasure.ts`](src/lib/reed_solomon_erasure.ts)). The encoding matrix is derived from a Vandermonde matrix so that data shards stay unchanged and any 5 of the 8 shards are enough to rebuild the rest.
+4.  **Shard Files & Distribution**: Shard *i* of every stripe is appended to `shard-i.bin`, and a SHA-256 checksum is computed for each file. The 8 shard files are distributed to different storage nodes in the network.
+5.  **Metadata**: `metadata.json` records the file size, stripe count, algorithm parameters, IV, auth tag and each shard's size and SHA-256. It is stored in the warehouse.
+
+<p align="center">
+  <img src="documents/images/laria-encode-pipeline.svg" alt="Laria encode pipeline: AES-256-GCM encryption, 20 MB stripes, Reed-Solomon (8, 5) producing 5 data and 3 parity shards" width="100%" />
+</p>
+
+<p align="center">
+  <img src="documents/images/laria-shard-layout.svg" alt="Shard layout: eight shard files, one per node, each with a SHA-256 checksum, plus metadata.json and the caller-held key" width="100%" />
+</p>
+
+> Storage overhead is 8 / 5 = **1.6×** the file size (plus the zero padding of the last stripe).
 
 ### Recovery
-- To recover a file, only **5 out of 8** shards are required. This allows the system to tolerate the loss of up to 3 shards (nodes) without data loss.
+
+1.  **Inspect**: Every shard file is checked against the size and SHA-256 recorded in `metadata.json`. A missing or corrupted shard is treated as lost.
+2.  **Select**: Any **5** intact shards are enough. Data shards are preferred, so when all 5 are intact no decoding is needed.
+3.  **Decode**: Reed-Solomon rebuilds the missing data shards stripe by stripe.
+4.  **Reassemble**: Data shards are streamed in order and the last stripe is trimmed to `originalFileSize`.
+5.  **Decrypt & Verify**: AES-256-GCM decrypts into a temporary `*.partial` file. Only if the authentication tag verifies is it renamed to the output path; a wrong key or tampered data leaves no output behind.
+
+<p align="center">
+  <img src="documents/images/laria-recovery.svg" alt="Recovery: shards 2 and 4 offline and shard 7 corrupted; the remaining 5 shards are decoded, reassembled, decrypted and verified" width="100%" />
+</p>
+
+| Shards lost or corrupted | Shards intact | Result |
+|---|---|---|
+| 0 | 8 | ✅ Read data shards directly |
+| 1 – 3 | 7 – 5 | ✅ Rebuild missing shards from parity |
+| 4 or more | 4 or fewer | ❌ Unrecoverable — `recoverFile()` throws |
+
+### Usage
+
+```typescript
+import { encodeFile, recoverFile } from '@/lib/laria';
+
+// Encrypt and shard: writes shard-1.bin … shard-8.bin and metadata.json
+const { metadata, key } = await encodeFile('./video.mp4', './shards/video');
+// Keep `key` (hex) safe — it is not stored in metadata.json
+
+// Rebuild from any 5 intact shards
+const result = await recoverFile('./shards/video', './restored.mp4', key);
+console.log(result.usedShards, result.missingShards, result.reconstructed);
+```
 
 ## Tech Stack
 
@@ -44,7 +83,7 @@ Laria is the core storage engine powering SwarmStorage. It handles the complexit
 
 ### Prerequisites
 - Docker
-- Node.js 22
+- Node.js 24.22.1 (see `.nvmrc`)
 
 ### Installation & Run
 
