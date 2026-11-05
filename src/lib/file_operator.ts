@@ -1,13 +1,57 @@
+import { ReedSolomonErasure } from '@/lib/reed_solomon_erasure';
+
 export interface IUploadCallbacks {
   onProgress?: (percentage: number) => void;
   onSuccess?: (hash: string, metadata?: ILariaMetadata) => void;
   onError?: (error: string) => void;
 }
 
+export interface IUploadOptions {
+  // Info: (20261105 - Luphia) 是否允許接收者下載 (預設允許)
+  allowDownload?: boolean;
+}
+
+export interface IMissingShard {
+  stripe: number;
+  index: number;
+}
+
+export interface IShardStats {
+  total: number;
+  missingData: number;
+  missingParity: number;
+  missing: IMissingShard[];
+  // Info: (20261105 - Luphia) 是否已用同位分片補回遺失的資料分片
+  reconstructed: boolean;
+}
+
 export interface IDownloadCallbacks {
   onProgress?: (percentage: number) => void;
   onSuccess?: (file: Blob, filename: string) => void;
   onError?: (error: string) => void;
+  // Info: (20261105 - Luphia) 回報分片取得狀況，供檔案瀏覽器顯示儲存健康度
+  onShardStats?: (stats: IShardStats) => void;
+}
+
+/**
+ * Info: (20251028 - Luphia) Download metadata interface
+ */
+export interface ILariaMetadata {
+  filename: string;
+  originalFileSize: number;
+  mimeType: string;
+  shards: string[];
+  algorithm: {
+    k: number;
+    m: number;
+    shardSize: number;
+    // Info: (20261105 - Luphia) 'reed-solomon' = 同位分片為真實編碼；未設定 = 舊版上傳 (同位分片為 0，無法重建)
+    parity?: 'reed-solomon';
+  };
+  // Info: (20261105 - Luphia) 未設定視為允許下載
+  allowDownload?: boolean;
+  uploadedAt?: number;
+  repairedAt?: number;
 }
 
 // Info: (20251028 - Luphia) Shared constants with server-side logic
@@ -17,38 +61,12 @@ const TOTAL_SHARDS = DATA_SHARDS + PARITY_SHARDS;
 const SHARD_SIZE = 4 * 1024 * 1024; // 4MB
 const DATA_STRIPE_SIZE = DATA_SHARDS * SHARD_SIZE; // 20MB
 
-// Info: (20251028 - Luphia) Mock Reed-Solomon Implementation
-class ReedSolomonErasure {
-  private dataShards: number;
-  private parityShards: number;
-
-  constructor(dataShards: number, parityShards: number) {
-    this.dataShards = dataShards;
-    this.parityShards = parityShards;
-  }
-
-  async encode(shards: Uint8Array[]): Promise<void> {
-    // Info: (20251028 - Luphia) Mock encoding: parity shards are just zeros
-    for (let i = this.dataShards; i < this.dataShards + this.parityShards; i++) {
-      shards[i] = new Uint8Array(shards[0].length);
-    }
-  }
-
-  async reconstruct(shards: (Uint8Array | null)[]): Promise<void> {
-    /**
-     * Info: (20251028 - Luphia) Mock reconstruction: just fill missing with zeros
-     * In real RS, this would use the available shards to rebuild missing ones.
-     */
-    const len = shards.find(s => s !== null)?.length || SHARD_SIZE;
-    for (let i = 0; i < shards.length; i++) {
-      if (shards[i] === null) {
-        shards[i] = new Uint8Array(len);
-      }
-    }
-  }
-}
-
+// Info: (20261105 - Luphia) 與伺服器端 Laria 共用的 Reed-Solomon (8, 5) 實作
 const rse = new ReedSolomonErasure(DATA_SHARDS, PARITY_SHARDS);
+
+export const isParityProtected = (metadata: ILariaMetadata): boolean => metadata.algorithm?.parity === 'reed-solomon';
+
+export const isDownloadAllowed = (metadata: ILariaMetadata): boolean => metadata.allowDownload !== false;
 
 /**
  * Info: (20251028 - Luphia) Helper to upload a single Blob to the backend
@@ -108,17 +126,45 @@ const downloadSingleFile = (cid: string): Promise<Blob> => {
   });
 };
 
+/**
+ * Info: (20261105 - Luphia)
+ * 下載一個條帶的 8 個分片 (平行)；取不到的分片為 null
+ * 分片大小不符視同遺失，避免錯誤資料進入重建
+ */
+const fetchStripe = async (
+  metadata: ILariaMetadata,
+  stripeIndex: number,
+  onShardDone: () => void
+): Promise<(Uint8Array | null)[]> => {
+  const cids = metadata.shards.slice(stripeIndex * TOTAL_SHARDS, (stripeIndex + 1) * TOTAL_SHARDS);
+  const shards: (Uint8Array | null)[] = new Array(TOTAL_SHARDS).fill(null);
+  await Promise.all(
+    cids.map(async (cid, i) => {
+      try {
+        const buffer = new Uint8Array(await (await downloadSingleFile(cid)).arrayBuffer());
+        if (buffer.length === SHARD_SIZE) shards[i] = buffer;
+      } catch {
+        // Info: (20260113 - Luphia) Missing shard
+      } finally {
+        onShardDone();
+      }
+    })
+  );
+  return shards;
+};
+
+const missingIndices = (shards: (Uint8Array | null)[]): number[] =>
+  shards.reduce<number[]>((acc, shard, i) => (shard ? acc : [...acc, i]), []);
 
 /**
  * Info: (20251028 - Luphia) Core Upload Function using Laria split logic
  */
-export const uploadFile = async (file: File, callbacks: IUploadCallbacks) => {
+export const uploadFile = async (file: File, callbacks: IUploadCallbacks, options: IUploadOptions = {}) => {
   try {
     const originalFileSize = file.size;
     const totalStripes = Math.ceil(originalFileSize / DATA_STRIPE_SIZE);
-
-    const totalUploadSize = totalStripes * TOTAL_SHARDS * SHARD_SIZE;
-    let totalBytesUploaded = 0;
+    const totalUploads = totalStripes * TOTAL_SHARDS;
+    let uploaded = 0;
 
     const shardCids: string[] = [];
 
@@ -126,50 +172,32 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks) => {
       const start = stripeIndex * DATA_STRIPE_SIZE;
       const end = Math.min(start + DATA_STRIPE_SIZE, originalFileSize);
 
-      const chunkBlob = file.slice(start, end);
-      const chunkBuffer = new Uint8Array(await chunkBlob.arrayBuffer());
+      // Info: (20261105 - Luphia) 最後一條帶以 0 填滿 20MB
+      const dataStripe = new Uint8Array(DATA_STRIPE_SIZE);
+      dataStripe.set(new Uint8Array(await file.slice(start, end).arrayBuffer()));
 
-      let dataStripe: Uint8Array;
-      if (chunkBuffer.length < DATA_STRIPE_SIZE) {
-        dataStripe = new Uint8Array(DATA_STRIPE_SIZE);
-        dataStripe.set(chunkBuffer);
-      } else {
-        dataStripe = chunkBuffer;
-      }
+      const shards: Uint8Array[] = [
+        ...Array.from({ length: DATA_SHARDS }, (_, i) => dataStripe.subarray(i * SHARD_SIZE, (i + 1) * SHARD_SIZE)),
+        ...Array.from({ length: PARITY_SHARDS }, () => new Uint8Array(SHARD_SIZE)),
+      ];
 
-      const shards: Uint8Array[] = [];
-      for (let i = 0; i < DATA_SHARDS; i++) {
-        const shardStart = i * SHARD_SIZE;
-        const shardEnd = (i + 1) * SHARD_SIZE;
-        shards.push(dataStripe.slice(shardStart, shardEnd));
-      }
-      for (let i = 0; i < PARITY_SHARDS; i++) {
-        shards.push(new Uint8Array(SHARD_SIZE));
-      }
+      // Info: (20261105 - Luphia) 真實 Reed-Solomon 編碼，任意 5 個分片即可還原
+      rse.encode(shards);
 
-      await rse.encode(shards);
-
-      for (let i = 0; i < TOTAL_SHARDS; i++) {
-        // Info: (20251028 - Luphia) Fix for Uint8Array not assignable to BlobPart issue by casting
-        const shardBlob = new Blob([shards[i] as unknown as BlobPart]);
-        const shardName = `${file.name}.part${stripeIndex * TOTAL_SHARDS + i}`;
-
-        try {
-          const cid = await uploadSingleFile(shardBlob, shardName);
-          shardCids.push(cid);
-
-          totalBytesUploaded += SHARD_SIZE;
-          if (callbacks.onProgress) {
-            const progress = (totalBytesUploaded / totalUploadSize) * 100;
-            callbacks.onProgress(Math.min(progress, 99));
-          }
-        } catch (err) {
-          throw err;
-        }
-      }
+      const cids = await Promise.all(
+        shards.map(async (shard, i) => {
+          // Info: (20251028 - Luphia) Fix for Uint8Array not assignable to BlobPart issue by casting
+          const shardBlob = new Blob([shard as unknown as BlobPart]);
+          const cid = await uploadSingleFile(shardBlob, `${file.name}.part${stripeIndex * TOTAL_SHARDS + i}`);
+          uploaded++;
+          if (callbacks.onProgress) callbacks.onProgress(Math.min((uploaded / totalUploads) * 100, 99));
+          return cid;
+        })
+      );
+      shardCids.push(...cids);
     }
 
-    const metadata = {
+    const metadata: ILariaMetadata = {
       filename: file.name,
       originalFileSize: file.size,
       mimeType: file.type,
@@ -177,8 +205,11 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks) => {
       algorithm: {
         k: DATA_SHARDS,
         m: PARITY_SHARDS,
-        shardSize: SHARD_SIZE
-      }
+        shardSize: SHARD_SIZE,
+        parity: 'reed-solomon',
+      },
+      allowDownload: options.allowDownload !== false,
+      uploadedAt: Date.now(),
     };
 
     const metadataBlob = new Blob([JSON.stringify(metadata)], { type: 'application/json' });
@@ -186,7 +217,6 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks) => {
 
     if (callbacks.onProgress) callbacks.onProgress(100);
     if (callbacks.onSuccess) callbacks.onSuccess(metadataCid, metadata);
-
   } catch (err) {
     if (callbacks.onError) {
       callbacks.onError(err instanceof Error ? err.message : 'Unknown error');
@@ -194,34 +224,18 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks) => {
   }
 
   return {
-    abort: () => { console.warn('Abort not fully implemented for split upload'); }
+    abort: () => {
+      console.warn('Abort not fully implemented for split upload');
+    },
   };
 };
 
 /**
- * Info: (20251028 - Luphia) Download metadata interface
- */
-export interface ILariaMetadata {
-  filename: string;
-  originalFileSize: number;
-  mimeType: string;
-  shards: string[];
-  algorithm: {
-    k: number;
-    m: number;
-    shardSize: number;
-  };
-}
-
-/**
  * Info: (20251028 - Luphia) Type guard for Laria Metadata
  */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function isLariaMetadata(obj: any): obj is ILariaMetadata {
-  return obj
-    && typeof obj.filename === 'string'
-    && typeof obj.originalFileSize === 'number'
-    && Array.isArray(obj.shards);
+function isLariaMetadata(obj: unknown): obj is ILariaMetadata {
+  const meta = obj as ILariaMetadata;
+  return !!meta && typeof meta.filename === 'string' && typeof meta.originalFileSize === 'number' && Array.isArray(meta.shards);
 }
 
 /**
@@ -238,35 +252,25 @@ export const downloadFile = async (cid: string, callbacks: IDownloadCallbacks) =
     // Info: (20251028 - Luphia) 1. Fetch the initial file/metadata
     const initialBlob = await downloadSingleFile(cid);
 
-    let isMetadata = false;
     let metadata: ILariaMetadata | null = null;
 
     // Info: (20260113 - Luphia) Optimization: Only check for metadata if file is reasonably small (<10MB)
-    // Info: (20260113 - Luphia) Large files are definitely not metadata JSONs.
     if (initialBlob.size < 10 * 1024 * 1024) {
       try {
-        const initialText = await initialBlob.text();
-        const parsed = JSON.parse(initialText);
-        if (isLariaMetadata(parsed)) {
-          isMetadata = true;
-          metadata = parsed;
-        }
+        const parsed = JSON.parse(await initialBlob.text());
+        if (isLariaMetadata(parsed)) metadata = parsed;
       } catch {
         // Info: (20260113 - Luphia) Not JSON, so it's a regular file
-        isMetadata = false;
       }
     }
 
-    if (isMetadata && metadata) {
+    if (metadata) {
       await downloadFromMetadata(metadata, callbacks);
     } else {
       // Info: (20260113 - Luphia) --- Direct Download ---
-      // Info: (20260113 - Luphia) It's just a file.
       if (callbacks.onProgress) callbacks.onProgress(100);
-      // Info: (20260113 - Luphia) Try to extract filename from header if possible, or use CID default
       if (callbacks.onSuccess) callbacks.onSuccess(initialBlob, `file_${cid}`);
     }
-
   } catch (err) {
     if (callbacks.onError) {
       callbacks.onError(err instanceof Error ? err.message : 'Download failed');
@@ -276,85 +280,116 @@ export const downloadFile = async (cid: string, callbacks: IDownloadCallbacks) =
 
 /**
  * Info: (20260113 - Luphia) Download file from Laria Metadata
+ * Info: (20261105 - Luphia) 遺失 1-3 個分片時以 Reed-Solomon 補回資料分片
  */
 export const downloadFromMetadata = async (metadata: ILariaMetadata, callbacks: IDownloadCallbacks) => {
   try {
-    // Info: (20260113 - Luphia) --- Laria Reconstruction ---
     const { originalFileSize, shards: shardCids, filename } = metadata;
+    const totalStripes = Math.ceil(shardCids.length / TOTAL_SHARDS);
+    const protectedByParity = isParityProtected(metadata);
 
-    const totalShards = shardCids.length;
-    const shardsPerStripe = TOTAL_SHARDS;
-    const totalStripes = Math.ceil(totalShards / shardsPerStripe);
-    let downloadedBytes = 0;
-    const totalExpectedDownload = totalShards * SHARD_SIZE; // Approximate
-
-    const reconstructedStripes: Uint8Array[] = [];
+    const stats: IShardStats = { total: shardCids.length, missingData: 0, missingParity: 0, missing: [], reconstructed: false };
+    const output = new Uint8Array(totalStripes * DATA_STRIPE_SIZE);
+    let fetched = 0;
 
     for (let stripeIdx = 0; stripeIdx < totalStripes; stripeIdx++) {
-      const stripeShardsCids = shardCids.slice(stripeIdx * shardsPerStripe, (stripeIdx + 1) * shardsPerStripe);
+      const shards = await fetchStripe(metadata, stripeIdx, () => {
+        fetched++;
+        if (callbacks.onProgress) callbacks.onProgress((fetched / shardCids.length) * 95);
+      });
 
-      const shards: (Uint8Array | null)[] = new Array(TOTAL_SHARDS).fill(null);
+      const missing = missingIndices(shards);
+      missing.forEach(index => {
+        stats.missing.push({ stripe: stripeIdx, index });
+        if (index < DATA_SHARDS) stats.missingData++;
+        else stats.missingParity++;
+      });
 
-      // Info: (20260113 - Luphia) Parallel download of shards for this stripe
-      await Promise.all(stripeShardsCids.map(async (shardCid, localIdx) => {
-        try {
-          const blob = await downloadSingleFile(shardCid);
-          const buffer = await blob.arrayBuffer();
-          shards[localIdx] = new Uint8Array(buffer);
-
-          downloadedBytes += SHARD_SIZE;
-          if (callbacks.onProgress) {
-            callbacks.onProgress((downloadedBytes / totalExpectedDownload) * 90); // Up to 90%
-          }
-        } catch {
-          // Info: (20260113 - Luphia) Missing shard
-          shards[localIdx] = null;
+      const missingData = missing.filter(i => i < DATA_SHARDS).length;
+      if (missingData > 0) {
+        if (!protectedByParity) {
+          throw new Error(
+            `Stripe ${stripeIdx + 1}: ${missingData} data shard(s) missing. This file was uploaded before parity protection and cannot be rebuilt.`
+          );
         }
-      }));
-
-      // Info: (20260113 - Luphia) Reconstruct
-      // Info: (20260113 - Luphia) Check sufficiency
-      const validShardsCount = shards.filter(s => s !== null).length;
-      if (validShardsCount < DATA_SHARDS) {
-        throw new Error(`Insufficient shards to reconstruct stripe ${stripeIdx}. Needed ${DATA_SHARDS}, got ${validShardsCount}.`);
+        if (missing.length > PARITY_SHARDS) {
+          throw new Error(
+            `Stripe ${stripeIdx + 1}: ${missing.length} of ${TOTAL_SHARDS} shards missing. At least ${DATA_SHARDS} are needed to rebuild the file.`
+          );
+        }
+        // Info: (20261105 - Luphia) 以同位分片補回資料分片
+        rse.reconstruct(shards, true);
+        stats.reconstructed = true;
       }
-
-      await rse.reconstruct(shards);
-
-      // Info: (20260113 - Luphia) Collect data shards
-      const dataShards = shards.slice(0, DATA_SHARDS) as Uint8Array[];
-
-      // Info: (20260113 - Luphia) Concat data shards for this stripe
-      // Info: (20260113 - Luphia) Calculate size: each shard is SHARD_SIZE
-      const stripeSize = DATA_SHARDS * SHARD_SIZE;
-      const stripeBuffer = new Uint8Array(stripeSize);
 
       for (let i = 0; i < DATA_SHARDS; i++) {
-        stripeBuffer.set(dataShards[i], i * SHARD_SIZE);
+        output.set(shards[i] as Uint8Array, stripeIdx * DATA_STRIPE_SIZE + i * SHARD_SIZE);
       }
-
-      reconstructedStripes.push(stripeBuffer);
-    }
-
-    // Info: (20260113 - Luphia) Merge all stripes
-    const finalBuffer = new Uint8Array(reconstructedStripes.reduce((acc, curr) => acc + curr.length, 0));
-    let offset = 0;
-    for (const stripe of reconstructedStripes) {
-      finalBuffer.set(stripe, offset);
-      offset += stripe.length;
     }
 
     // Info: (20260113 - Luphia) Truncate to original size
-    const truncated = finalBuffer.slice(0, originalFileSize);
+    const finalBlob = new Blob([output.subarray(0, originalFileSize) as unknown as BlobPart], {
+      type: metadata.mimeType || 'application/octet-stream',
+    });
 
-    const finalBlob = new Blob([truncated as unknown as BlobPart], { type: metadata.mimeType || 'application/octet-stream' });
-
+    if (callbacks.onShardStats) callbacks.onShardStats(stats);
     if (callbacks.onProgress) callbacks.onProgress(100);
     if (callbacks.onSuccess) callbacks.onSuccess(finalBlob, filename);
-
   } catch (err) {
     if (callbacks.onError) {
       callbacks.onError(err instanceof Error ? err.message : 'Download failed');
     }
   }
+};
+
+export interface IRepairResult {
+  metadata: ILariaMetadata;
+  repaired: IMissingShard[];
+}
+
+/**
+ * Info: (20261105 - Luphia)
+ * 修復：重建遺失的分片 (資料與同位) 並重新存入儲存網路，回傳更新後的 metadata
+ * - 每個條帶最多可修復 3 個遺失分片
+ * - 分片以內容定址，重建後的內容與原始分片相同
+ */
+export const repairFile = async (
+  metadata: ILariaMetadata,
+  onProgress?: (percentage: number) => void
+): Promise<IRepairResult> => {
+  if (!isParityProtected(metadata)) {
+    throw new Error('This file was uploaded before parity protection and cannot be repaired. Upload it again to protect it.');
+  }
+
+  const shardCids = [...metadata.shards];
+  const totalStripes = Math.ceil(shardCids.length / TOTAL_SHARDS);
+  const repaired: IMissingShard[] = [];
+
+  for (let stripeIdx = 0; stripeIdx < totalStripes; stripeIdx++) {
+    const shards = await fetchStripe(metadata, stripeIdx, () => undefined);
+    const missing = missingIndices(shards);
+
+    if (missing.length > PARITY_SHARDS) {
+      throw new Error(`Stripe ${stripeIdx + 1}: ${missing.length} shards missing, more than the ${PARITY_SHARDS} that can be rebuilt.`);
+    }
+
+    if (missing.length > 0) {
+      const rebuilt = rse.reconstruct(shards);
+      await Promise.all(
+        missing.map(async index => {
+          const position = stripeIdx * TOTAL_SHARDS + index;
+          const blob = new Blob([rebuilt[index] as unknown as BlobPart]);
+          shardCids[position] = await uploadSingleFile(blob, `${metadata.filename}.part${position}`);
+          repaired.push({ stripe: stripeIdx, index });
+        })
+      );
+    }
+
+    if (onProgress) onProgress(((stripeIdx + 1) / totalStripes) * 100);
+  }
+
+  return {
+    metadata: repaired.length > 0 ? { ...metadata, shards: shardCids, repairedAt: Date.now() } : metadata,
+    repaired,
+  };
 };

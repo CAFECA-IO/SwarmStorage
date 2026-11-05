@@ -1,0 +1,755 @@
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import Link from 'next/link';
+import {
+  downloadFromMetadata,
+  isDownloadAllowed,
+  repairFile,
+  type ILariaMetadata,
+  type IShardStats,
+} from '@/lib/file_operator';
+import type { IHtmlOutlineItem, IHtmlPreviewOptions, IPreparedHtml, IRoomFileResolver } from '@/lib/html_preview';
+import {
+  FILE_GROUP_LABELS,
+  FILE_KIND_DOT,
+  getFileGroup,
+  getFileKind,
+  guessMimeType,
+  type TFileGroup,
+} from '@/lib/file_types';
+import { formatBytes } from '@/lib/utils';
+import { ApiCode } from '@/lib/status';
+import { ClockIcon, LockIcon, XIcon } from '@/components/icons';
+import FilePreviewPane, { type IFileLoadState, type TViewMode } from '@/components/file_preview_pane';
+import FileInspector, { type IRepairState } from '@/components/file_inspector';
+import type { IHtmlViewerHandle } from '@/components/html_viewer';
+
+interface IRoomWorkspaceProps {
+  roomId: string;
+  initialPassword?: string;
+  initialFile?: string;
+  onExit: () => void;
+}
+
+// Info: (20261105 - Luphia) 開啟分頁時自動載入預覽的大小上限
+const AUTO_PREVIEW_LIMIT = 50 * 1024 * 1024;
+// Info: (20261105 - Luphia) HTML / 文字檔以文字讀入的大小上限
+const TEXT_PREVIEW_LIMIT = 20 * 1024 * 1024;
+
+const DEFAULT_PREVIEW_OPTIONS: IHtmlPreviewOptions = {
+  allowScripts: false,
+  allowExternal: false,
+  resolveRoomFiles: true,
+};
+
+const GROUP_ORDER: TFileGroup[] = ['documents', 'media', 'other'];
+
+interface IRoomExpiry {
+  expiresAt: number | null;
+  // Info: (20261105 - Luphia) 伺服器時間 - 本機時間，修正時鐘誤差
+  clockOffset: number;
+}
+
+const formatRemaining = (ms: number): string => {
+  if (ms <= 0) return 'Expired';
+  const minutes = Math.floor(ms / 60000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  if (days > 0) return `Expires in ${days} d ${hours} h`;
+  if (hours > 0) return `Expires in ${hours} h ${minutes % 60} min`;
+  return `Expires in ${Math.max(minutes, 1)} min`;
+};
+
+const saveBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+/**
+ * Info: (20261105 - Luphia)
+ * 房間檔案瀏覽器 (C 方案：閱讀工作區)
+ * - 左：依類型分組的檔案清單 + 目前 HTML 文件的目錄
+ * - 中：分頁、路徑 / 頁內搜尋 / 檢視模式工具列、預覽
+ * - 右：檔案資訊、儲存健康度、預覽安全開關
+ */
+export default function RoomWorkspace({ roomId, initialPassword, initialFile, onExit }: IRoomWorkspaceProps) {
+  const [files, setFiles] = useState<ILariaMetadata[] | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState('');
+  const [needsPassword, setNeedsPassword] = useState(false);
+  const [password, setPassword] = useState(initialPassword || '');
+  const [passwordError, setPasswordError] = useState('');
+
+  const [openTabs, setOpenTabs] = useState<string[]>([]);
+  const [activeName, setActiveName] = useState<string | null>(null);
+  const [loads, setLoads] = useState<Record<string, IFileLoadState>>({});
+  const [shardStats, setShardStats] = useState<Record<string, IShardStats>>({});
+  const [outlines, setOutlines] = useState<Record<string, IHtmlOutlineItem[]>>({});
+  const [inlinedFiles, setInlinedFiles] = useState<Record<string, string[]>>({});
+  const [activeHeading, setActiveHeading] = useState('');
+  const [viewMode, setViewMode] = useState<TViewMode>('reading');
+  const [previewOptions, setPreviewOptions] = useState<IHtmlPreviewOptions>(DEFAULT_PREVIEW_OPTIONS);
+  const [findQuery, setFindQuery] = useState('');
+  const [findStatus, setFindStatus] = useState<'idle' | 'found' | 'missing'>('idle');
+  const [findPosition, setFindPosition] = useState({ index: 0, total: 0 });
+  const [downloading, setDownloading] = useState<Record<string, boolean>>({});
+  const [linkCopied, setLinkCopied] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [expiry, setExpiry] = useState<IRoomExpiry | null>(null);
+  const [now, setNow] = useState(0);
+  const [repairs, setRepairs] = useState<Record<string, IRepairState>>({});
+
+  const viewerRef = useRef<IHtmlViewerHandle>(null);
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const filesRef = useRef<ILariaMetadata[]>([]);
+  const blobPromises = useRef(new Map<string, Promise<Blob>>());
+  const objectUrls = useRef<string[]>([]);
+
+  // Info: (20261105 - Luphia) 釋放預覽用的 object URL
+  useEffect(() => {
+    const urls = objectUrls.current;
+    return () => urls.forEach(url => URL.revokeObjectURL(url));
+  }, []);
+
+  /**
+   * Info: (20261105 - Luphia)
+   * 下載並快取檔案內容；同一檔案只會下載一次 (預覽、下載與 HTML 內嵌資源共用)
+   */
+  const loadBlob = useCallback((name: string): Promise<Blob> => {
+    const cached = blobPromises.current.get(name);
+    if (cached) return cached;
+    const meta = filesRef.current.find(f => f.filename === name);
+    if (!meta) return Promise.reject(new Error(`File not found: ${name}`));
+
+    setLoads(prev => ({ ...prev, [name]: { status: 'loading', progress: 0 } }));
+    const promise = new Promise<Blob>((resolve, reject) => {
+      downloadFromMetadata(meta, {
+        onProgress: progress =>
+          setLoads(prev => (prev[name]?.status === 'loading' ? { ...prev, [name]: { ...prev[name], progress } } : prev)),
+        onShardStats: stats => setShardStats(prev => ({ ...prev, [name]: stats })),
+        onSuccess: async raw => {
+          const kind = getFileKind(name, meta.mimeType);
+          const blob = new Blob([raw], { type: guessMimeType(name, meta.mimeType) });
+          const state: IFileLoadState = { status: 'ready', progress: 100, blob };
+          if (kind === 'html' || kind === 'text') {
+            if (blob.size <= TEXT_PREVIEW_LIMIT) state.text = await blob.text();
+          } else if (kind !== 'other') {
+            state.url = URL.createObjectURL(blob);
+            objectUrls.current.push(state.url);
+          }
+          setLoads(prev => ({ ...prev, [name]: state }));
+          resolve(blob);
+        },
+        onError: error => {
+          blobPromises.current.delete(name);
+          setLoads(prev => ({ ...prev, [name]: { status: 'error', progress: 0, error } }));
+          reject(new Error(error));
+        },
+      });
+    });
+    blobPromises.current.set(name, promise);
+    return promise;
+  }, []);
+
+  const openFile = useCallback(
+    (name: string) => {
+      const meta = filesRef.current.find(f => f.filename === name);
+      if (!meta) return;
+      setOpenTabs(prev => (prev.includes(name) ? prev : [...prev, name]));
+      setActiveName(name);
+      setActiveHeading('');
+      setFindStatus('idle');
+      setNavOpen(false);
+      const kind = getFileKind(name, meta.mimeType);
+      if (kind !== 'other' && meta.originalFileSize <= AUTO_PREVIEW_LIMIT) {
+        loadBlob(name).catch(() => undefined);
+      }
+    },
+    [loadBlob]
+  );
+
+  const fetchExpiry = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/v1/room/${roomId}/expiration`);
+      const data = await res.json();
+      if (data.code === ApiCode.OK && data.payload) {
+        const localNow = Date.now();
+        setExpiry({ expiresAt: data.payload.expiresAt, clockOffset: (data.payload.serverTime ?? localNow) - localNow });
+        setNow(localNow);
+      }
+    } catch {
+      // Info: (20261105 - Luphia) 到期時間僅供顯示，失敗時不影響瀏覽
+    }
+  }, [roomId]);
+
+  // Info: (20261105 - Luphia) 每 30 秒更新倒數
+  useEffect(() => {
+    if (!expiry?.expiresAt) return;
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, [expiry]);
+
+  const fetchFiles = useCallback(
+    async (passwordValue?: string) => {
+      try {
+        const headers: Record<string, string> = {};
+        if (passwordValue) headers['x-room-password'] = passwordValue;
+        const res = await fetch(`/api/v1/room/${roomId}`, { headers });
+        const data = await res.json();
+
+        if (data.code === ApiCode.OK) {
+          const list = ([...(data.payload || [])] as ILariaMetadata[]).sort((a, b) => a.filename.localeCompare(b.filename));
+          filesRef.current = list;
+          setFiles(list);
+          setNeedsPassword(false);
+          setPasswordError('');
+          setErrorMessage('');
+          if (initialFile && list.some(f => f.filename === initialFile)) openFile(initialFile);
+          fetchExpiry();
+        } else if (data.code === ApiCode.UNAUTHORIZED) {
+          setNeedsPassword(true);
+          if (passwordValue) setPasswordError('Incorrect password');
+        } else {
+          setErrorMessage(data.message || 'Failed to load room files');
+        }
+      } catch {
+        setErrorMessage('Network error');
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [roomId, initialFile, openFile, fetchExpiry]
+  );
+
+  useEffect(() => {
+    const init = async () => {
+      await fetchFiles(initialPassword);
+    };
+    init();
+  }, [fetchFiles, initialPassword]);
+
+  const handlePasswordSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    fetchFiles(password);
+  };
+
+  const closeTab = (name: string) => {
+    const index = openTabs.indexOf(name);
+    const next = openTabs.filter(n => n !== name);
+    setOpenTabs(next);
+    if (activeName === name) {
+      setActiveName(next.length ? next[Math.min(index, next.length - 1)] : null);
+      setActiveHeading('');
+    }
+  };
+
+  const handleTabKeyDown = (e: KeyboardEvent<HTMLButtonElement>, index: number) => {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    e.preventDefault();
+    const nextIndex = (index + (e.key === 'ArrowRight' ? 1 : -1) + openTabs.length) % openTabs.length;
+    setActiveName(openTabs[nextIndex]);
+    setActiveHeading('');
+    document.getElementById(`tab-${nextIndex}`)?.focus();
+  };
+
+  const handleDownload = async (name: string) => {
+    const meta = filesRef.current.find(f => f.filename === name);
+    if (!meta || !isDownloadAllowed(meta)) return;
+    const ready = loads[name];
+    if (ready?.status === 'ready' && ready.blob) {
+      saveBlob(ready.blob, name);
+      return;
+    }
+    setDownloading(prev => ({ ...prev, [name]: true }));
+    try {
+      saveBlob(await loadBlob(name), name);
+    } catch {
+      // Info: (20261105 - Luphia) 錯誤已寫入 loads 狀態並顯示於預覽區
+    } finally {
+      setDownloading(prev => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+    }
+  };
+
+  const handleCopyLink = async (name: string) => {
+    const url = `${window.location.origin}/room/${roomId}?file=${encodeURIComponent(name)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      window.prompt('Copy this link', url);
+    }
+  };
+
+  /**
+   * Info: (20261105 - Luphia)
+   * 重建遺失分片並更新房間中的 metadata
+   */
+  const handleRepair = async (name: string) => {
+    const meta = filesRef.current.find(f => f.filename === name);
+    if (!meta) return;
+    setRepairs(prev => ({ ...prev, [name]: { status: 'running', progress: 0 } }));
+    try {
+      const result = await repairFile(meta, progress =>
+        setRepairs(prev => ({ ...prev, [name]: { status: 'running', progress } }))
+      );
+      if (result.repaired.length > 0) {
+        const res = await fetch(`/api/v1/room/${roomId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(result.metadata),
+        });
+        const data = await res.json();
+        if (data.code !== ApiCode.OK) throw new Error(data.message || 'Failed to save repaired metadata');
+        const list = filesRef.current.map(f => (f.filename === name ? result.metadata : f));
+        filesRef.current = list;
+        setFiles(list);
+      }
+      setShardStats(prev => ({
+        ...prev,
+        [name]: { total: meta.shards.length, missingData: 0, missingParity: 0, missing: [], reconstructed: false },
+      }));
+      setRepairs(prev => ({
+        ...prev,
+        [name]: {
+          status: 'done',
+          progress: 100,
+          message:
+            result.repaired.length > 0
+              ? `Rebuilt and re-stored ${result.repaired.length} shard${result.repaired.length > 1 ? 's' : ''}.`
+              : 'No missing shards found.',
+        },
+      }));
+    } catch (err) {
+      setRepairs(prev => ({
+        ...prev,
+        [name]: { status: 'error', progress: 0, message: err instanceof Error ? err.message : 'Repair failed' },
+      }));
+    }
+  };
+
+  const runFind = (backwards = false) => {
+    if (!findQuery.trim()) return;
+    viewerRef.current?.find(findQuery, backwards);
+  };
+
+  const resolver = useMemo<IRoomFileResolver>(
+    () => ({
+      filenames: (files || []).map(f => f.filename),
+      load: loadBlob,
+      sizeOf: (name: string) => files?.find(f => f.filename === name)?.originalFileSize ?? Number.POSITIVE_INFINITY,
+    }),
+    [files, loadBlob]
+  );
+
+  const handleOutline = useCallback(
+    (outline: IHtmlOutlineItem[]) => {
+      if (activeName) setOutlines(prev => ({ ...prev, [activeName]: outline }));
+    },
+    [activeName]
+  );
+
+  const handlePrepared = useCallback(
+    (prepared: IPreparedHtml) => {
+      if (activeName) setInlinedFiles(prev => ({ ...prev, [activeName]: prepared.inlinedFiles }));
+    },
+    [activeName]
+  );
+
+  const handleFindResult = useCallback((result: { found: boolean; index: number; total: number }) => {
+    setFindStatus(result.found ? 'found' : 'missing');
+    setFindPosition({ index: result.index, total: result.total });
+  }, []);
+
+  const groups = useMemo(() => {
+    const result: Record<TFileGroup, ILariaMetadata[]> = { documents: [], media: [], other: [] };
+    (files || []).forEach(f => result[getFileGroup(getFileKind(f.filename, f.mimeType))].push(f));
+    return result;
+  }, [files]);
+
+  const activeFile = files?.find(f => f.filename === activeName) || null;
+  const activeKind = activeFile ? getFileKind(activeFile.filename, activeFile.mimeType) : null;
+  const activeOutline = activeName ? outlines[activeName] || [] : [];
+  const showHtmlTools = activeKind === 'html' && loads[activeName || '']?.status === 'ready';
+  const canFind = showHtmlTools && viewMode !== 'source';
+
+  // Info: (20261105 - Luphia) Ctrl/Cmd + F 聚焦頁內搜尋
+  useEffect(() => {
+    if (!canFind) return;
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        findInputRef.current?.focus();
+        findInputRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [canFind]);
+
+  // --- Info: (20261105 - Luphia) 版面區塊 ---
+
+  const navigation = (
+    <>
+      <div className="flex items-center justify-between gap-2 px-1.5">
+        <Link href="/" className="text-[17px] font-bold text-blue-400 hover:text-blue-300">
+          Drop Here
+        </Link>
+        <span className="font-mono text-xs tracking-[0.06em] text-slate-300">#{roomId}</span>
+      </div>
+      {expiry && now > 0 && (
+        <p
+          className={`-mt-2 flex items-center gap-1.5 px-1.5 text-xs ${expiry.expiresAt && expiry.expiresAt - (now + expiry.clockOffset) < 3600000 ? 'text-amber-300' : 'text-slate-400'}`}
+        >
+          <ClockIcon className="h-3.5 w-3.5" />
+          {expiry.expiresAt ? formatRemaining(expiry.expiresAt - (now + expiry.clockOffset)) : 'No expiry set'}
+        </p>
+      )}
+
+      {GROUP_ORDER.filter(group => groups[group].length > 0).map(group => (
+        <div key={group} className="flex flex-col gap-0.5">
+          <p className="mx-1.5 mb-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">{FILE_GROUP_LABELS[group]}</p>
+          {groups[group].map(f => {
+            const kind = getFileKind(f.filename, f.mimeType);
+            const isActive = f.filename === activeName;
+            return (
+              <button
+                key={f.filename}
+                type="button"
+                onClick={() => openFile(f.filename)}
+                aria-current={isActive ? 'page' : undefined}
+                className={`flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${isActive ? 'bg-slate-800 font-semibold text-white' : 'text-slate-300 hover:bg-white/5'}`}
+              >
+                <span className={`h-2 w-2 shrink-0 rounded-sm ${FILE_KIND_DOT[kind]}`} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">{f.filename}</span>
+                <span className="shrink-0 font-mono text-[10px] text-slate-500">{formatBytes(f.originalFileSize)}</span>
+              </button>
+            );
+          })}
+        </div>
+      ))}
+
+      {files && files.length === 0 && <p className="px-1.5 text-sm text-slate-400">No files in this room yet.</p>}
+
+      {activeKind === 'html' && activeOutline.length > 0 && viewMode !== 'source' && (
+        <div className="flex flex-col gap-0.5 border-t border-white/10 pt-4">
+          <p className="mx-1.5 mb-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">On this page</p>
+          {activeOutline.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => {
+                viewerRef.current?.scrollTo(item.id);
+                setActiveHeading(item.id);
+                setNavOpen(false);
+              }}
+              className={`min-h-8 rounded-md pr-2.5 text-left text-[13px] leading-5 py-1.5 transition-colors ${item.level >= 3 ? 'pl-6' : 'pl-2.5'} ${activeHeading === item.id ? 'bg-blue-500/10 text-blue-300' : 'text-slate-300 hover:bg-white/5'}`}
+            >
+              {item.text}
+            </button>
+          ))}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onExit}
+        className="mt-auto h-10 rounded-lg border border-white/10 text-xs font-semibold tracking-wide text-slate-300 uppercase hover:bg-white/5"
+      >
+        Exit room
+      </button>
+    </>
+  );
+
+  const renderMain = () => {
+    if (isLoading && !files) {
+      return <div className="flex flex-1 items-center justify-center font-mono text-sm text-slate-400 animate-pulse">Scanning blocks…</div>;
+    }
+    if (errorMessage) {
+      return (
+        <div className="flex flex-1 items-center justify-center p-6">
+          <div className="rounded-xl border border-red-500/30 bg-red-500/10 px-5 py-4 text-sm text-red-300 font-mono">{errorMessage}</div>
+        </div>
+      );
+    }
+    if (!activeFile) {
+      return (
+        <div className="flex flex-1 items-center justify-center p-6 text-center">
+          <div>
+            <p className="text-base font-semibold text-slate-200">Select a file to open it</p>
+            <p className="mt-1 text-sm text-slate-400">
+              {files ? `${files.length} file${files.length === 1 ? '' : 's'} in room #${roomId}` : ''}
+            </p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <>
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-white/10 px-4 py-2.5">
+          <div className="flex h-9 min-w-0 flex-[1_1_280px] items-center gap-2 overflow-hidden rounded-lg border border-white/10 bg-slate-900 px-3 font-mono text-xs text-slate-400 whitespace-nowrap">
+            <LockIcon className="h-3.5 w-3.5 shrink-0 text-emerald-400" />
+            <span className="truncate">
+              drophere / {roomId} / <span className="text-slate-100">{activeFile.filename}</span>
+            </span>
+          </div>
+
+          {canFind && (
+            <form
+              className="flex h-9 flex-[0_1_240px] items-center gap-1.5 rounded-lg border border-white/10 bg-slate-900 pl-2.5 pr-1"
+              onSubmit={e => {
+                e.preventDefault();
+                runFind(false);
+              }}
+            >
+              <label htmlFor="find-in-page" className="sr-only">
+                Find in page
+              </label>
+              <input
+                id="find-in-page"
+                aria-label="Find in page"
+                ref={findInputRef}
+                type="search"
+                value={findQuery}
+                placeholder="Find in page"
+                onChange={e => {
+                  setFindQuery(e.target.value);
+                  setFindStatus('idle');
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' && e.shiftKey) {
+                    e.preventDefault();
+                    runFind(true);
+                  }
+                }}
+                className="min-w-0 flex-1 bg-transparent text-xs text-slate-100 outline-none placeholder:text-slate-500"
+              />
+              {findStatus === 'missing' && <span className="shrink-0 text-[11px] text-amber-300">No match</span>}
+              {findStatus === 'found' && (
+                <span className="shrink-0 font-mono text-[11px] text-slate-400" aria-live="polite">
+                  {findPosition.index}/{findPosition.total}
+                </span>
+              )}
+              <button type="submit" className="h-7 shrink-0 rounded-md px-2 text-[11px] font-semibold text-slate-300 hover:bg-white/10">
+                Next
+              </button>
+            </form>
+          )}
+
+          {showHtmlTools && (
+            <div role="group" aria-label="View mode" className="inline-flex gap-[3px] rounded-[10px] border border-white/10 bg-slate-900 p-[3px]">
+              {(
+                [
+                  ['reading', 'Reading'],
+                  ['full', 'Full width'],
+                  ['source', 'Source'],
+                ] as [TViewMode, string][]
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={viewMode === mode}
+                  onClick={() => setViewMode(mode)}
+                  className={`h-[30px] rounded-[7px] px-2.5 text-xs ${viewMode === mode ? 'bg-slate-800 font-semibold text-white' : 'font-medium text-slate-400 hover:text-slate-200'}`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setInspectorOpen(true)}
+            className="h-9 rounded-lg border border-white/10 px-3 text-xs font-medium text-slate-300 hover:bg-white/5 xl:hidden"
+          >
+            Details
+          </button>
+        </div>
+
+        <div className="relative min-h-0 flex-1 bg-slate-950">
+          <FilePreviewPane
+            key={activeFile.filename}
+            file={activeFile}
+            load={loads[activeFile.filename]}
+            viewMode={viewMode}
+            previewOptions={previewOptions}
+            resolver={resolver}
+            viewerRef={viewerRef}
+            onLoad={() => {
+              loadBlob(activeFile.filename).catch(() => undefined);
+            }}
+            canDownload={isDownloadAllowed(activeFile)}
+            onDownload={() => handleDownload(activeFile.filename)}
+            onOutline={handleOutline}
+            onActiveHeading={setActiveHeading}
+            onOpenFile={openFile}
+            onFindResult={handleFindResult}
+            onPrepared={handlePrepared}
+          />
+        </div>
+      </>
+    );
+  };
+
+  return (
+    <div className="flex h-dvh flex-col overflow-hidden bg-slate-950 font-sans text-slate-100 lg:flex-row">
+      {/* Info: (20261105 - Luphia) 手機版頂部列 */}
+      <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 lg:hidden">
+        <button
+          type="button"
+          onClick={() => setNavOpen(true)}
+          className="h-10 rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-200"
+        >
+          Files
+        </button>
+        <span className="flex-1 truncate font-mono text-xs text-slate-300">#{roomId}</span>
+      </div>
+
+      <nav
+        aria-label="Room files"
+        className={`${navOpen ? 'fixed inset-0 z-40 flex' : 'hidden'} w-full flex-col gap-[18px] overflow-y-auto border-r border-white/10 bg-[#0D1424] px-3.5 py-[18px] lg:static lg:flex lg:w-[264px] lg:shrink-0`}
+      >
+        {navOpen && (
+          <button
+            type="button"
+            onClick={() => setNavOpen(false)}
+            aria-label="Close file list"
+            className="absolute right-3 top-3 flex h-10 w-10 items-center justify-center rounded-lg text-slate-300 lg:hidden"
+          >
+            <XIcon className="text-slate-300" />
+          </button>
+        )}
+        {navigation}
+      </nav>
+
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        {openTabs.length > 0 && (
+          <div role="tablist" aria-label="Open files" className="flex items-end gap-0.5 overflow-x-auto border-b border-white/10 bg-[#0D1424] px-3 pt-2.5">
+            {openTabs.map((name, index) => {
+              const meta = files?.find(f => f.filename === name);
+              const kind = meta ? getFileKind(meta.filename, meta.mimeType) : 'other';
+              const selected = name === activeName;
+              return (
+                <div
+                  key={name}
+                  className={`-mb-px flex h-10 shrink-0 items-center gap-1 rounded-t-[10px] border pl-3.5 pr-1.5 ${selected ? 'border-white/10 border-b-slate-950 bg-slate-950' : 'border-transparent'}`}
+                >
+                  <button
+                    id={`tab-${index}`}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => {
+                      setActiveName(name);
+                      setActiveHeading('');
+                      setFindStatus('idle');
+                    }}
+                    onKeyDown={e => handleTabKeyDown(e, index)}
+                    className={`flex items-center gap-2 whitespace-nowrap text-[13px] ${selected ? 'font-semibold text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                  >
+                    <span className={`h-2 w-2 rounded-sm ${FILE_KIND_DOT[kind]}`} aria-hidden="true" />
+                    {name}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Close ${name}`}
+                    onClick={() => closeTab(name)}
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-slate-400 hover:bg-white/10 hover:text-slate-200"
+                  >
+                    <XIcon className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {renderMain()}
+      </main>
+
+      {activeFile && (
+        <aside
+          aria-label="File details"
+          className={`${inspectorOpen ? 'fixed inset-y-0 right-0 z-40 flex w-[min(320px,100vw)] shadow-2xl shadow-black' : 'hidden'} flex-col overflow-y-auto border-l border-white/10 bg-[#0D1424] xl:static xl:flex xl:w-[300px] xl:shrink-0 xl:shadow-none`}
+        >
+          {inspectorOpen && (
+            <button
+              type="button"
+              onClick={() => setInspectorOpen(false)}
+              className="mx-5 mt-4 h-10 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 xl:hidden"
+            >
+              Close details
+            </button>
+          )}
+          <FileInspector
+            file={activeFile}
+            shardStats={shardStats[activeFile.filename]}
+            downloadProgress={downloading[activeFile.filename] ? loads[activeFile.filename]?.progress ?? 0 : null}
+            linkCopied={linkCopied}
+            previewOptions={previewOptions}
+            inlinedFiles={inlinedFiles[activeFile.filename] || []}
+            onPreviewOptionsChange={setPreviewOptions}
+            repair={repairs[activeFile.filename]}
+            onRepair={() => handleRepair(activeFile.filename)}
+            onDownload={() => handleDownload(activeFile.filename)}
+            onCopyLink={() => handleCopyLink(activeFile.filename)}
+            onPrint={() => viewerRef.current?.print()}
+          />
+        </aside>
+      )}
+
+      {needsPassword && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+          <form
+            onSubmit={handlePasswordSubmit}
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl"
+            aria-labelledby="password-title"
+          >
+            <h2 id="password-title" className="mb-1 text-lg font-bold text-slate-100">
+              Password required
+            </h2>
+            <p className="mb-4 text-sm text-slate-400">Room #{roomId} is protected.</p>
+            <label htmlFor="room-password" className="sr-only">
+              Room password
+            </label>
+            <input
+              id="room-password"
+              aria-label="Room password"
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              autoComplete="current-password"
+              className="mb-3 h-12 w-full rounded-xl border border-white/10 bg-black/40 px-4 text-center font-mono text-lg tracking-widest text-white outline-none focus:ring-2 focus:ring-blue-500/50"
+            />
+            {passwordError && <p className="mb-3 text-center text-xs font-bold text-red-400">{passwordError}</p>}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onExit}
+                className="h-11 flex-1 rounded-xl border border-white/10 font-bold text-slate-400 hover:bg-white/5"
+              >
+                Cancel
+              </button>
+              <button type="submit" className="h-11 flex-1 rounded-xl bg-blue-600 font-bold text-white hover:bg-blue-500">
+                Unlock
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}

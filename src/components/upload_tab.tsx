@@ -5,6 +5,8 @@ import { CloudUploadIcon, FileIcon, XIcon, TrashIcon, DownloadIcon } from '@/com
 import RoomPasswordSetter from '@/components/room_password_setter';
 import RoomRetentionSetter from '@/components/room_retention_setter';
 import RoomNumberDisplay from '@/components/room_number_display';
+import RoomSharePanel from '@/components/room_share_panel';
+import ToggleSwitch from '@/components/toggle_switch';
 
 // Info: (20260113 - Luphia) Types
 interface IFileUploadState {
@@ -16,6 +18,10 @@ interface IFileUploadState {
   error?: string;
   isDownloading?: boolean;
   downloadProgress?: number;
+  // Info: (20261105 - Luphia) 是否允許接收者下載，與房間中的 metadata 同步
+  allowDownload: boolean;
+  metadata?: ILariaMetadata;
+  linkCopied?: boolean;
 }
 
 
@@ -39,6 +45,8 @@ interface IUploadTabProps {
 export default function UploadTab({ roomNumber }: IUploadTabProps) {
   const [files, setFiles] = useState<IFileUploadState[]>([]);
   const [dragActive, setDragActive] = useState(false);
+  // Info: (20261105 - Luphia) 新上傳檔案的預設下載權限
+  const [allowDownload, setAllowDownload] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const uploadFile = (fileItem: IFileUploadState) => {
@@ -54,7 +62,8 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
             ...f,
             status: 'completed',
             progress: 100,
-            cid
+            cid,
+            metadata
           } : f
         ));
 
@@ -79,7 +88,7 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
           f.id === fileItem.id ? { ...f, status: 'error', error } : f
         ));
       }
-    });
+    }, { allowDownload: fileItem.allowDownload });
   };
 
   const handleFiles = (newFiles: File[]) => {
@@ -87,7 +96,8 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
       id: Math.random().toString(36).substring(7),
       file,
       progress: 0,
-      status: 'uploading'
+      status: 'uploading',
+      allowDownload
     }));
 
     setFiles(prev => [...newUploads, ...prev]);
@@ -127,6 +137,41 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
+  /**
+   * Info: (20261105 - Luphia)
+   * 上傳後變更單一檔案的下載權限：更新房間中的 metadata
+   */
+  const setFileDownload = async (id: string, allow: boolean) => {
+    const item = files.find(f => f.id === id);
+    if (!item?.metadata || !roomNumber) return;
+    const previous = item.metadata;
+    const metadata: ILariaMetadata = { ...previous, allowDownload: allow };
+    setFiles(prev => prev.map(f => (f.id === id ? { ...f, allowDownload: allow, metadata } : f)));
+    try {
+      const res = await fetch(`/api/v1/room/${roomNumber}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(metadata)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error('[Room] Failed to update download permission:', err);
+      setFiles(prev => prev.map(f => (f.id === id ? { ...f, allowDownload: previous.allowDownload !== false, metadata: previous } : f)));
+    }
+  };
+
+  const copyFileLink = async (id: string, filename: string) => {
+    if (!roomNumber) return;
+    const url = `${window.location.origin}/room/${roomNumber}?file=${encodeURIComponent(filename)}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      setFiles(prev => prev.map(f => (f.id === id ? { ...f, linkCopied: true } : f)));
+      setTimeout(() => setFiles(prev => prev.map(f => (f.id === id ? { ...f, linkCopied: false } : f))), 2000);
+    } catch {
+      window.prompt('Copy this link', url);
+    }
+  };
+
   const removeFile = (id: string) => {
     setFiles(prev => prev.filter(f => f.id !== id));
   };
@@ -142,6 +187,16 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
             <RoomPasswordSetter roomNumber={roomNumber} />
           </div>
           <RoomRetentionSetter roomNumber={roomNumber} />
+          <RoomSharePanel roomNumber={roomNumber} />
+          <div className="rounded-2xl border border-white/10 bg-black/20 px-3">
+            <ToggleSwitch
+              id="upload-allow-download"
+              label="Allow downloads"
+              description={allowDownload ? 'Recipients can preview and download new uploads' : 'New uploads are view only'}
+              checked={allowDownload}
+              onChange={setAllowDownload}
+            />
+          </div>
         </div>
       )}
 
@@ -304,6 +359,26 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
                 ) : (
                   <div className="text-xs text-red-400 mt-1 font-medium">
                     Upload failed
+                  </div>
+                )}
+
+                {file.status === 'completed' && file.metadata && roomNumber && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-3 border-t border-white/5 pt-1">
+                    <div className="min-w-0 flex-1">
+                      <ToggleSwitch
+                        id={`allow-download-${file.id}`}
+                        label="Allow download"
+                        checked={file.allowDownload}
+                        onChange={allow => setFileDownload(file.id, allow)}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => copyFileLink(file.id, file.file.name)}
+                      className="h-9 rounded-lg border border-white/10 px-3 text-xs font-medium text-slate-300 hover:bg-white/5"
+                    >
+                      {file.linkCopied ? 'Link copied' : 'Copy file link'}
+                    </button>
                   </div>
                 )}
               </div>
