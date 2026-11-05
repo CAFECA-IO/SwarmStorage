@@ -5,9 +5,11 @@ import ConfirmDialog from '@/components/confirm_dialog';
 
 interface IRoomPasswordSetterProps {
   roomNumber: string;
+  // Info: (20261105 - Luphia) 通知父層目前的房間密碼 (聊天加入時使用)，移除密碼時為 null
+  onPasswordChange?: (password: string | null) => void;
 }
 
-export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterProps) {
+export default function RoomPasswordSetter({ roomNumber, onPasswordChange }: IRoomPasswordSetterProps) {
   const [password, setPassword] = useState('');
   const [showPasswordInput, setShowPasswordInput] = useState(false);
   const [showKeyboard, setShowKeyboard] = useState(false);
@@ -39,6 +41,7 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
         body: JSON.stringify({ password })
       });
       console.log('Password set successfully');
+      onPasswordChange?.(password);
       setIsLocked(true);
       setShowPasswordInput(false);
       setPassword('');
@@ -55,6 +58,7 @@ export default function RoomPasswordSetter({ roomNumber }: IRoomPasswordSetterPr
       await fetch(`/api/v1/room/${roomNumber}/password`, {
         method: 'DELETE',
       });
+      onPasswordChange?.(null);
       setIsLocked(false);
       setShowPasswordInput(false);
       setPassword('');

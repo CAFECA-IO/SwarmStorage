@@ -3,7 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
-import { keccak256, toUtf8Bytes } from 'ethers';
+import { checkRoomAccess, isValidRoomId } from '@/lib/room_access';
 
 const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
 
@@ -13,6 +13,9 @@ export async function POST(
 ) {
   try {
     const { room_id: roomId } = await params;
+    if (!isValidRoomId(roomId)) {
+      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid room number");
+    }
     const roomPath = path.join(ROOM_BASE_DIR, roomId);
 
     // Info: (20260113 - Luphia) Validate room exists
@@ -48,44 +51,13 @@ export async function GET(
 ) {
   try {
     const { room_id: roomId } = await params;
-    const roomPath = path.join(ROOM_BASE_DIR, roomId);
 
-    // Info: (20260113 - Luphia) Validate room exists
-    try {
-      await fs.access(roomPath);
-    } catch {
-      return jsonFail(ApiCode.NOT_FOUND, "Room not found");
+    // Info: (20261105 - Luphia) 共用房間存取檢查：房號格式、存在、到期、密碼
+    const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'));
+    if (!access.ok) {
+      return jsonFail(access.code, access.message);
     }
-
-    // Info: (20260113 - Luphia) Check config (Expiration & Password)
-    try {
-      const configPath = path.join(roomPath, '_config.json');
-      const configContent = await fs.readFile(configPath, 'utf-8');
-      const config = JSON.parse(configContent);
-
-      // Info: (20260113 - Luphia) 1. Check Expiration
-      if (config.expiration && config.expiration.expiresAt) {
-        if (Date.now() > config.expiration.expiresAt) {
-          return jsonFail(ApiCode.NOT_FOUND, "Room expired");
-        }
-      }
-
-      // Info: (20260113 - Luphia) 2. Check Password
-      if (config.passwordHash) {
-        const providedPassword = request.headers.get('x-room-password');
-        if (!providedPassword) {
-          // Info: (20260113 - Luphia) We return 401 with a specific code so frontend knows to prompt
-          return jsonFail(ApiCode.UNAUTHORIZED, "Password required");
-        }
-        const providedHash = keccak256(toUtf8Bytes(providedPassword));
-        if (providedHash !== config.passwordHash) {
-          return jsonFail(ApiCode.UNAUTHORIZED, "Invalid password");
-        }
-      }
-
-    } catch {
-      // Info: (20260113 - Luphia) No config or error reading it -> assume valid (no password, no expiration)
-    }
+    const { roomPath } = access;
 
     const files = await fs.readdir(roomPath);
     const metadataList = [];

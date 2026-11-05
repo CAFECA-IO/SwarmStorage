@@ -21,6 +21,8 @@ import { ApiCode } from '@/lib/status';
 import { ClockIcon, LockIcon, XIcon } from '@/components/icons';
 import FilePreviewPane, { type IFileLoadState, type TViewMode } from '@/components/file_preview_pane';
 import FileInspector, { type IRepairState } from '@/components/file_inspector';
+import RoomChat from '@/components/room_chat';
+import { useRoomChat } from '@/lib/use_room_chat';
 import type { IHtmlViewerHandle } from '@/components/html_viewer';
 
 interface IRoomWorkspaceProps {
@@ -104,12 +106,28 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const [expiry, setExpiry] = useState<IRoomExpiry | null>(null);
   const [now, setNow] = useState(0);
   const [repairs, setRepairs] = useState<Record<string, IRepairState>>({});
+  // Info: (20261105 - Luphia) 聊天：通過密碼驗證後才連線
+  const [chatEnabled, setChatEnabled] = useState(false);
+  const [chatPassword, setChatPassword] = useState<string | null>(null);
+  const [sideTab, setSideTab] = useState<'details' | 'chat'>('details');
+  const [seenMessages, setSeenMessages] = useState(0);
 
   const viewerRef = useRef<IHtmlViewerHandle>(null);
   const findInputRef = useRef<HTMLInputElement>(null);
   const filesRef = useRef<ILariaMetadata[]>([]);
   const blobPromises = useRef(new Map<string, Promise<Blob>>());
   const objectUrls = useRef<string[]>([]);
+
+  const chat = useRoomChat({ roomId, password: chatPassword, enabled: chatEnabled });
+  const othersMessageCount = chat.entries.filter(e => e.kind === 'message' && e.message.memberId !== chat.me?.memberId).length;
+  const othersCountRef = useRef(0);
+  const activeNameRef = useRef<string | null>(null);
+  useEffect(() => {
+    othersCountRef.current = othersMessageCount;
+  }, [othersMessageCount]);
+  useEffect(() => {
+    activeNameRef.current = activeName;
+  }, [activeName]);
 
   // Info: (20261105 - Luphia) 釋放預覽用的 object URL
   useEffect(() => {
@@ -161,6 +179,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     (name: string) => {
       const meta = filesRef.current.find(f => f.filename === name);
       if (!meta) return;
+      // Info: (20261105 - Luphia) 沒有開啟檔案時側欄顯示聊天；開啟檔案後切到 Details，視為已讀
+      if (!activeNameRef.current) setSeenMessages(othersCountRef.current);
       setOpenTabs(prev => (prev.includes(name) ? prev : [...prev, name]));
       setActiveName(name);
       setActiveHeading('');
@@ -208,6 +228,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           filesRef.current = list;
           setFiles(list);
           setNeedsPassword(false);
+          setChatPassword(passwordValue || null);
+          setChatEnabled(true);
           setPasswordError('');
           setErrorMessage('');
           if (initialFile && list.some(f => f.filename === initialFile)) openFile(initialFile);
@@ -381,6 +403,26 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const activeFile = files?.find(f => f.filename === activeName) || null;
   const activeKind = activeFile ? getFileKind(activeFile.filename, activeFile.mimeType) : null;
   const activeOutline = activeName ? outlines[activeName] || [] : [];
+  const sidePanelTab = activeFile ? sideTab : 'chat';
+  const unreadMessages = sidePanelTab === 'chat' ? 0 : Math.max(0, othersMessageCount - seenMessages);
+
+  const switchSidePanel = (tab: 'details' | 'chat') => {
+    if (sidePanelTab === 'chat' || tab === 'chat') setSeenMessages(othersMessageCount);
+    setSideTab(tab);
+  };
+
+  const openChatDrawer = () => {
+    switchSidePanel('chat');
+    setNavOpen(false);
+    setInspectorOpen(true);
+  };
+
+  const unreadBadge =
+    unreadMessages > 0 ? (
+      <span className="ml-1.5 inline-flex min-w-5 items-center justify-center rounded-full bg-blue-500 px-1.5 text-[10px] font-bold leading-5 text-white">
+        {unreadMessages > 99 ? '99+' : unreadMessages}
+      </span>
+    ) : null;
   const showHtmlTools = activeKind === 'html' && loads[activeName || '']?.status === 'ready';
   const canFind = showHtmlTools && viewMode !== 'source';
 
@@ -464,8 +506,16 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
       <button
         type="button"
+        onClick={openChatDrawer}
+        className="mt-auto hidden h-10 items-center justify-center rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/5 lg:flex xl:hidden"
+      >
+        Chat · {chat.online} online
+        {unreadBadge}
+      </button>
+      <button
+        type="button"
         onClick={onExit}
-        className="mt-auto h-10 rounded-lg border border-white/10 text-xs font-semibold tracking-wide text-slate-300 uppercase hover:bg-white/5"
+        className="mt-auto h-10 lg:mt-0 xl:mt-auto rounded-lg border border-white/10 text-xs font-semibold tracking-wide text-slate-300 uppercase hover:bg-white/5"
       >
         Exit room
       </button>
@@ -572,10 +622,21 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
           <button
             type="button"
-            onClick={() => setInspectorOpen(true)}
+            onClick={() => {
+              switchSidePanel('details');
+              setInspectorOpen(true);
+            }}
             className="h-9 rounded-lg border border-white/10 px-3 text-xs font-medium text-slate-300 hover:bg-white/5 xl:hidden"
           >
             Details
+          </button>
+          <button
+            type="button"
+            onClick={openChatDrawer}
+            className="inline-flex h-9 items-center rounded-lg border border-white/10 px-3 text-xs font-medium text-slate-300 hover:bg-white/5 xl:hidden"
+          >
+            Chat
+            {unreadBadge}
           </button>
         </div>
 
@@ -616,6 +677,14 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           Files
         </button>
         <span className="flex-1 truncate font-mono text-xs text-slate-300">#{roomId}</span>
+        <button
+          type="button"
+          onClick={openChatDrawer}
+          className="inline-flex h-10 items-center rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-200"
+        >
+          Chat
+          {unreadBadge}
+        </button>
       </div>
 
       <nav
@@ -680,36 +749,70 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         {renderMain()}
       </main>
 
-      {activeFile && (
-        <aside
-          aria-label="File details"
-          className={`${inspectorOpen ? 'fixed inset-y-0 right-0 z-40 flex w-[min(320px,100vw)] shadow-2xl shadow-black' : 'hidden'} flex-col overflow-y-auto border-l border-white/10 bg-[#0D1424] xl:static xl:flex xl:w-[300px] xl:shrink-0 xl:shadow-none`}
-        >
+      <aside
+        aria-label="Side panel"
+        className={`${inspectorOpen ? 'fixed inset-y-0 right-0 z-40 flex w-[min(340px,100vw)] shadow-2xl shadow-black' : 'hidden'} min-h-0 flex-col overflow-hidden border-l border-white/10 bg-[#0D1424] xl:static xl:flex xl:w-[320px] xl:shrink-0 xl:shadow-none`}
+      >
+        <div className="flex items-center gap-1 border-b border-white/10 px-3 pt-3">
+          <div role="tablist" aria-label="Side panel" className="flex flex-1 gap-1">
+            {activeFile && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidePanelTab === 'details'}
+                onClick={() => switchSidePanel('details')}
+                className={`-mb-px h-10 border-b-2 px-3 text-xs font-semibold ${sidePanelTab === 'details' ? 'border-blue-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+              >
+                Details
+              </button>
+            )}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sidePanelTab === 'chat'}
+              onClick={() => switchSidePanel('chat')}
+              className={`-mb-px inline-flex h-10 items-center border-b-2 px-3 text-xs font-semibold ${sidePanelTab === 'chat' ? 'border-blue-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+            >
+              Chat
+              <span className="ml-1.5 font-normal text-slate-400">{chat.status === 'connected' ? chat.online : ''}</span>
+              {unreadBadge}
+            </button>
+          </div>
           {inspectorOpen && (
             <button
               type="button"
               onClick={() => setInspectorOpen(false)}
-              className="mx-5 mt-4 h-10 rounded-lg border border-white/10 text-xs font-semibold text-slate-300 xl:hidden"
+              aria-label="Close side panel"
+              className="flex h-10 w-10 items-center justify-center rounded-lg text-slate-300 hover:bg-white/5 xl:hidden"
             >
-              Close details
+              <XIcon className="text-slate-300" />
             </button>
           )}
-          <FileInspector
-            file={activeFile}
-            shardStats={shardStats[activeFile.filename]}
-            downloadProgress={downloading[activeFile.filename] ? loads[activeFile.filename]?.progress ?? 0 : null}
-            linkCopied={linkCopied}
-            previewOptions={previewOptions}
-            inlinedFiles={inlinedFiles[activeFile.filename] || []}
-            onPreviewOptionsChange={setPreviewOptions}
-            repair={repairs[activeFile.filename]}
-            onRepair={() => handleRepair(activeFile.filename)}
-            onDownload={() => handleDownload(activeFile.filename)}
-            onCopyLink={() => handleCopyLink(activeFile.filename)}
-            onPrint={() => viewerRef.current?.print()}
-          />
-        </aside>
-      )}
+        </div>
+
+        {sidePanelTab === 'details' && activeFile ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <FileInspector
+              file={activeFile}
+              shardStats={shardStats[activeFile.filename]}
+              downloadProgress={downloading[activeFile.filename] ? loads[activeFile.filename]?.progress ?? 0 : null}
+              linkCopied={linkCopied}
+              previewOptions={previewOptions}
+              inlinedFiles={inlinedFiles[activeFile.filename] || []}
+              onPreviewOptionsChange={setPreviewOptions}
+              repair={repairs[activeFile.filename]}
+              onRepair={() => handleRepair(activeFile.filename)}
+              onDownload={() => handleDownload(activeFile.filename)}
+              onCopyLink={() => handleCopyLink(activeFile.filename)}
+              onPrint={() => viewerRef.current?.print()}
+            />
+          </div>
+        ) : (
+          <div className="min-h-0 flex-1">
+            <RoomChat chat={chat} showHeader={false} />
+          </div>
+        )}
+      </aside>
 
       {needsPassword && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">

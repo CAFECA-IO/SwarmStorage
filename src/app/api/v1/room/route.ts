@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
+import { onlineCount } from '@/lib/chat_hub';
 
 const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
 
@@ -38,7 +39,8 @@ export async function POST() {
             }
 
             const files = await fs.readdir(itemPath);
-            if (files.filter(f => f !== '_config.json').length === 0) {
+            // Info: (20261105 - Luphia) 仍有人在聊天的空房間不清除
+            if (files.filter(f => f !== '_config.json').length === 0 && onlineCount(item) === 0) {
               await fs.rmdir(itemPath);
               console.log(`[Room] Removed empty room: ${item}`);
             }

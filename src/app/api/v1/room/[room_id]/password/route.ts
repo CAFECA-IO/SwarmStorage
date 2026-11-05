@@ -4,6 +4,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
+import { isValidRoomId } from '@/lib/room_access';
 import { keccak256, toUtf8Bytes } from 'ethers';
 
 const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
@@ -14,6 +15,9 @@ export async function POST(
 ) {
   try {
     const { room_id: roomId } = await params;
+    if (!isValidRoomId(roomId)) {
+      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid room number");
+    }
     const roomPath = path.join(ROOM_BASE_DIR, roomId);
 
     // Info: (20260113 - Luphia) Validate room exists
@@ -71,6 +75,9 @@ export async function GET(
 ) {
   try {
     const { room_id: roomId } = await params;
+    if (!isValidRoomId(roomId)) {
+      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid room number");
+    }
     const roomPath = path.join(ROOM_BASE_DIR, roomId);
     const configPath = path.join(roomPath, '_config.json');
 
@@ -93,6 +100,9 @@ export async function DELETE(
 ) {
   try {
     const { room_id: roomId } = await params;
+    if (!isValidRoomId(roomId)) {
+      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid room number");
+    }
     const roomPath = path.join(ROOM_BASE_DIR, roomId);
     const configPath = path.join(roomPath, '_config.json');
 

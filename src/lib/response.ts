@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { ApiCode } from '@/lib/status';
+import { ApiCode, HTTP_MAP } from '@/lib/status';
 import { name, version } from '@/package';
 
 export const POWERBY = `${name} v${version}`;
@@ -45,18 +45,6 @@ export const jsonFail = (code: ApiCode, message: string, init?: ResponseInit) =>
   });
 
 function httpStatusOf(code: ApiCode): number {
-  switch (code) {
-    case ApiCode.OK:
-      return 200;
-    case ApiCode.VALIDATION_ERROR:
-      return 400;
-    case ApiCode.UNAUTHORIZED:
-      return 401;
-    case ApiCode.FORBIDDEN:
-      return 403;
-    case ApiCode.NOT_FOUND:
-      return 404;
-    default:
-      return 500;
-  }
+  // Info: (20261105 - Luphia) 統一使用 status.ts 的對照表 (含 429 RATE_LIMIT、409 CONFLICT)
+  return HTTP_MAP[code] ?? 500;
 }

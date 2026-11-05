@@ -7,6 +7,8 @@ import RoomRetentionSetter from '@/components/room_retention_setter';
 import RoomNumberDisplay from '@/components/room_number_display';
 import RoomSharePanel from '@/components/room_share_panel';
 import ToggleSwitch from '@/components/toggle_switch';
+import RoomChat from '@/components/room_chat';
+import { useRoomChat } from '@/lib/use_room_chat';
 
 // Info: (20260113 - Luphia) Types
 interface IFileUploadState {
@@ -47,6 +49,13 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
   const [dragActive, setDragActive] = useState(false);
   // Info: (20261105 - Luphia) 新上傳檔案的預設下載權限
   const [allowDownload, setAllowDownload] = useState(true);
+  // Info: (20261105 - Luphia) 房間聊天：上傳者也在房間內，可與下載者對話
+  const [roomPassword, setRoomPassword] = useState<string | null>(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [seenMessages, setSeenMessages] = useState(0);
+  const chat = useRoomChat({ roomId: roomNumber, password: roomPassword, enabled: !!roomNumber });
+  const othersMessageCount = chat.entries.filter(e => e.kind === 'message' && e.message.memberId !== chat.me?.memberId).length;
+  const unreadMessages = chatOpen ? 0 : Math.max(0, othersMessageCount - seenMessages);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const uploadFile = (fileItem: IFileUploadState) => {
@@ -184,10 +193,43 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
         <div className="flex flex-col gap-4 px-2 mb-6">
           <div className="flex flex-wrap items-center gap-3">
             <RoomNumberDisplay roomNumber={roomNumber} />
-            <RoomPasswordSetter roomNumber={roomNumber} />
+            <RoomPasswordSetter roomNumber={roomNumber} onPasswordChange={setRoomPassword} />
           </div>
           <RoomRetentionSetter roomNumber={roomNumber} />
           <RoomSharePanel roomNumber={roomNumber} />
+          <div className="overflow-hidden rounded-2xl border border-white/10 bg-black/20">
+            <button
+              type="button"
+              aria-expanded={chatOpen}
+              aria-controls="upload-room-chat"
+              onClick={() => {
+                setSeenMessages(othersMessageCount);
+                setChatOpen(open => !open);
+              }}
+              className="flex min-h-11 w-full items-center justify-between gap-2 px-3 text-left text-[13px] text-slate-200 hover:bg-white/5"
+            >
+              <span className="flex items-center gap-2">
+                Room chat
+                {unreadMessages > 0 && (
+                  <span className="inline-flex min-w-5 items-center justify-center rounded-full bg-blue-500 px-1.5 text-[10px] font-bold leading-5 text-white">
+                    {unreadMessages}
+                  </span>
+                )}
+              </span>
+              <span className="flex items-center gap-1.5 text-xs text-slate-400">
+                <span className={`h-2 w-2 rounded-full ${chat.status === 'connected' ? 'bg-emerald-400' : 'bg-slate-500'}`} aria-hidden="true" />
+                {chat.status === 'connected' ? `${chat.online} online` : 'Offline'}
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true" className={`transition-transform ${chatOpen ? 'rotate-180' : ''}`}>
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </span>
+            </button>
+            {chatOpen && (
+              <div id="upload-room-chat" className="h-80 border-t border-white/10">
+                <RoomChat chat={chat} showHeader={false} />
+              </div>
+            )}
+          </div>
           <div className="rounded-2xl border border-white/10 bg-black/20 px-3">
             <ToggleSwitch
               id="upload-allow-download"
