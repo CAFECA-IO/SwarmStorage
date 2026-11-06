@@ -26,6 +26,11 @@ interface IFileInspectorProps {
   onCopyLink: () => void;
   onPrint: () => void;
   onRepair: () => void;
+  // Info: (20261106 - Luphia) 上傳者 / 房主可管理檔案 (下載權限、刪除)
+  uploaderLabel?: string;
+  canManage?: boolean;
+  onToggleDownload?: (allow: boolean) => void;
+  onDelete?: () => void;
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
@@ -52,6 +57,10 @@ export default function FileInspector({
   onCopyLink,
   onPrint,
   onRepair,
+  uploaderLabel,
+  canManage = false,
+  onToggleDownload,
+  onDelete,
 }: IFileInspectorProps) {
   const kind = getFileKind(file.filename, file.mimeType);
   const isHtml = isRenderedDocument(kind);
@@ -146,9 +155,37 @@ export default function FileInspector({
               <dd className="text-slate-200">{uploaded}</dd>
             </>
           )}
-          <dt className="text-slate-400">Downloads</dt>
-          <dd className="text-slate-200">{canDownload ? 'Allowed' : 'Off (view only)'}</dd>
+          {uploaderLabel && (
+            <>
+              <dt className="text-slate-400">Uploaded by</dt>
+              <dd className="text-slate-200">{uploaderLabel}</dd>
+            </>
+          )}
+          {!canManage && (
+            <>
+              <dt className="text-slate-400">Downloads</dt>
+              <dd className="text-slate-200">{canDownload ? 'Allowed' : 'Off (view only)'}</dd>
+            </>
+          )}
         </dl>
+        {canManage && onToggleDownload && (
+          <ToggleSwitch
+            id="inspector-allow-download"
+            label="Allow downloads"
+            description={canDownload ? 'Anyone in the room can download' : 'View only'}
+            checked={canDownload}
+            onChange={onToggleDownload}
+          />
+        )}
+        {canManage && onDelete && (
+          <button
+            type="button"
+            onClick={onDelete}
+            className="mt-1 h-10 rounded-xl border border-red-500/30 text-xs font-semibold text-red-300 hover:bg-red-950/50"
+          >
+            Delete from room
+          </button>
+        )}
       </section>
 
       <section className="flex flex-col gap-2.5">

@@ -24,7 +24,12 @@ import FilePreviewPane, { type IFileLoadState, type TViewMode } from '@/componen
 import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
 import RoomActivity from '@/components/room_activity';
+import RoomSettingsPanel from '@/components/room_settings_panel';
+import type { IFileAction } from '@/components/file_actions_menu';
 import { useRoomChat } from '@/lib/use_room_chat';
+import { useRoomUploader } from '@/lib/use_room_uploader';
+import { addRecentRoom, memberHeaders } from '@/lib/member';
+import type { IRoomSettings } from '@/lib/room_store';
 import type { IHtmlViewerHandle } from '@/components/html_viewer';
 
 interface IRoomWorkspaceProps {
@@ -47,10 +52,17 @@ const DEFAULT_PREVIEW_OPTIONS: IHtmlPreviewOptions = {
 
 const GROUP_ORDER: TFileGroup[] = ['documents', 'media', 'other'];
 
-interface IRoomExpiry {
-  expiresAt: number | null;
-  // Info: (20261105 - Luphia) 伺服器時間 - 本機時間，修正時鐘誤差
-  clockOffset: number;
+// Info: (20261106 - Luphia) 刪除後可復原的時間 (與伺服器 DELETE_UNDO_MS 相同)
+const DELETE_UNDO_MS = 10000;
+
+type TSidePanelTab = 'details' | 'chat' | 'settings';
+
+interface IToast {
+  id: string;
+  message: string;
+  tone: 'success' | 'info' | 'error';
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 const formatRemaining = (ms: number): string => {
@@ -105,13 +117,19 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const [linkCopied, setLinkCopied] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
   const [inspectorOpen, setInspectorOpen] = useState(false);
-  const [expiry, setExpiry] = useState<IRoomExpiry | null>(null);
+  const [settings, setSettings] = useState<IRoomSettings | null>(null);
+  // Info: (20261105 - Luphia) 伺服器時間 - 本機時間，修正時鐘誤差
+  const [clockOffset, setClockOffset] = useState(0);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [dragActive, setDragActive] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [now, setNow] = useState(0);
   const [repairs, setRepairs] = useState<Record<string, IRepairState>>({});
   // Info: (20261105 - Luphia) 聊天：通過密碼驗證後才連線
   const [chatEnabled, setChatEnabled] = useState(false);
   const [chatPassword, setChatPassword] = useState<string | null>(null);
-  const [sideTab, setSideTab] = useState<'details' | 'chat'>('details');
+  const [sideTab, setSideTab] = useState<TSidePanelTab>('details');
   const [seenMessages, setSeenMessages] = useState(0);
 
   const viewerRef = useRef<IHtmlViewerHandle>(null);
@@ -123,13 +141,19 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   // Info: (20261105 - Luphia) 即時上傳：進房後新增的檔案、想被通知的上傳、完成提示
   const [newFiles, setNewFiles] = useState<Record<string, number>>({});
   const [watching, setWatching] = useState<Set<string>>(() => new Set());
-  const [toasts, setToasts] = useState<{ id: string; filename: string }[]>([]);
+  const [toasts, setToasts] = useState<IToast[]>([]);
   const watchingRef = useRef(watching);
   useEffect(() => {
     watchingRef.current = watching;
   }, [watching]);
 
   const dismissToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
+  const pushToast = (toast: Omit<IToast, 'id'>, duration = 10000) => {
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setToasts(prev => [...prev.slice(-3), { ...toast, id }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), duration);
+    return id;
+  };
 
   /**
    * Info: (20261105 - Luphia)
@@ -168,16 +192,66 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         next.delete(uploadId);
         return next;
       });
-      const toastId = `${uploadId}-${Date.now()}`;
-      setToasts(prev => [...prev, { id: toastId, filename: name }]);
-      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toastId)), 10000);
+      pushToast({ message: `${name} is ready`, tone: 'success', actionLabel: 'Open', onAction: () => openFile(name) });
       if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
         new Notification(`${name} is ready`, { body: `Room #${roomId}` });
       }
     }
   };
 
-  const chat = useRoomChat({ roomId, password: chatPassword, enabled: chatEnabled, onFile: handleFileEvent });
+  /**
+   * Info: (20261106 - Luphia)
+   * 檔案被刪除 (由伺服器即時推送)：移出清單、關閉分頁並清除快取
+   */
+  const handleFileRemoved = (name: string) => {
+    const list = filesRef.current.filter(f => f.filename !== name);
+    filesRef.current = list;
+    setFiles(list);
+    blobPromises.current.delete(name);
+    setOpenTabs(prev => prev.filter(n => n !== name));
+    if (activeNameRef.current === name) {
+      setActiveName(null);
+      setActiveHeading('');
+    }
+    setNewFiles(prev => {
+      if (!(name in prev)) return prev;
+      const next = { ...prev };
+      delete next[name];
+      return next;
+    });
+  };
+
+  // Info: (20261106 - Luphia) 房主變更設定：更新公開欄位，保留自己的身分資訊
+  const handleRoomSettings = (raw: Record<string, unknown>) => {
+    setSettings(prev => {
+      if (!prev) return prev;
+      const next = { ...prev, ...(raw as Partial<IRoomSettings>), isOwner: prev.isOwner, myUploaderId: prev.myUploaderId, serverTime: prev.serverTime };
+      next.canUpload = prev.isOwner || next.uploadPolicy === 'everyone';
+      return next;
+    });
+  };
+
+  const chat = useRoomChat({
+    roomId,
+    password: chatPassword,
+    enabled: chatEnabled,
+    onFile: handleFileEvent,
+    onFileRemoved: handleFileRemoved,
+    onRoomSettings: handleRoomSettings,
+  });
+
+  const pushToastRef = useRef(pushToast);
+  useEffect(() => {
+    pushToastRef.current = pushToast;
+  });
+  const handleUploadError = useCallback((message: string) => pushToastRef.current({ message, tone: 'error' }), []);
+  const uploadFiles = useRoomUploader({
+    roomId,
+    password: chatPassword,
+    allowDownload: settings?.allowDownload ?? true,
+    chat,
+    onError: handleUploadError,
+  });
 
   const toggleWatch = (uploadId: string) => {
     const adding = !watching.has(uploadId);
@@ -266,19 +340,23 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     [loadBlob]
   );
 
-  const fetchExpiry = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/v1/room/${roomId}/expiration`);
-      const data = await res.json();
-      if (data.code === ApiCode.OK && data.payload) {
-        const localNow = Date.now();
-        setExpiry({ expiresAt: data.payload.expiresAt, clockOffset: (data.payload.serverTime ?? localNow) - localNow });
-        setNow(localNow);
+  const fetchSettings = useCallback(
+    async (passwordValue?: string) => {
+      try {
+        const res = await fetch(`/api/v1/room/${roomId}/settings`, { headers: memberHeaders({}, passwordValue || null) });
+        const data = await res.json();
+        if (data.code === ApiCode.OK && data.payload) {
+          const localNow = Date.now();
+          setSettings(data.payload as IRoomSettings);
+          setClockOffset((data.payload.serverTime ?? localNow) - localNow);
+          setNow(localNow);
+        }
+      } catch {
+        // Info: (20261106 - Luphia) 設定載入失敗時仍可瀏覽檔案 (無上傳 / 管理功能)
       }
-    } catch {
-      // Info: (20261105 - Luphia) 到期時間僅供顯示，失敗時不影響瀏覽
-    }
-  }, [roomId]);
+    },
+    [roomId]
+  );
 
   // Info: (20261105 - Luphia) 每 10 秒更新時間 (到期倒數、「幾秒前」)
   useEffect(() => {
@@ -294,9 +372,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const fetchFiles = useCallback(
     async (passwordValue?: string) => {
       try {
-        const headers: Record<string, string> = {};
-        if (passwordValue) headers['x-room-password'] = passwordValue;
-        const res = await fetch(`/api/v1/room/${roomId}`, { headers });
+        const res = await fetch(`/api/v1/room/${roomId}`, { headers: memberHeaders({}, passwordValue || null) });
         const data = await res.json();
 
         if (data.code === ApiCode.OK) {
@@ -309,7 +385,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           setPasswordError('');
           setErrorMessage('');
           if (initialFile && list.some(f => f.filename === initialFile)) openFile(initialFile);
-          fetchExpiry();
+          addRecentRoom(roomId);
+          fetchSettings(passwordValue);
         } else if (data.code === ApiCode.UNAUTHORIZED) {
           setNeedsPassword(true);
           if (passwordValue) setPasswordError('Incorrect password');
@@ -322,7 +399,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         setIsLoading(false);
       }
     },
-    [roomId, initialFile, openFile, fetchExpiry]
+    [roomId, initialFile, openFile, fetchSettings]
   );
 
   useEffect(() => {
@@ -405,7 +482,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       if (result.repaired.length > 0) {
         const res = await fetch(`/api/v1/room/${roomId}`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: memberHeaders({ 'Content-Type': 'application/json' }, chatPassword),
           body: JSON.stringify(result.metadata),
         });
         const data = await res.json();
@@ -435,6 +512,124 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         [name]: { status: 'error', progress: 0, message: err instanceof Error ? err.message : 'Repair failed' },
       }));
     }
+  };
+
+  const myUploaderId = settings?.myUploaderId ?? null;
+  const isOwner = settings?.isOwner ?? false;
+  const canManageFile = (file: ILariaMetadata) => isOwner || (!!myUploaderId && file.uploaderId === myUploaderId);
+  const uploaderLabel = (file: ILariaMetadata) => {
+    if (!file.uploaderId) return 'Earlier upload';
+    if (myUploaderId && file.uploaderId === myUploaderId) return 'You';
+    return 'Someone else';
+  };
+
+  /**
+   * Info: (20261106 - Luphia)
+   * 刪除檔案：伺服器先移至回收區，10 秒內可復原
+   */
+  const handleDelete = async (name: string) => {
+    try {
+      const res = await fetch(`/api/v1/room/${roomId}/files/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+        headers: memberHeaders({}, chatPassword),
+      });
+      const data = await res.json();
+      if (data.code !== ApiCode.OK) throw new Error(data.message || 'Could not delete the file');
+      handleFileRemoved(name);
+      pushToast(
+        {
+          message: `${name} was deleted`,
+          tone: 'info',
+          actionLabel: 'Undo',
+          onAction: () => handleRestore(name),
+        },
+        DELETE_UNDO_MS
+      );
+    } catch (err) {
+      pushToast({ message: err instanceof Error ? err.message : 'Could not delete the file', tone: 'error' });
+    }
+  };
+
+  const handleRestore = async (name: string) => {
+    try {
+      const res = await fetch(`/api/v1/room/${roomId}/files/${encodeURIComponent(name)}/restore`, {
+        method: 'POST',
+        headers: memberHeaders({}, chatPassword),
+      });
+      const data = await res.json();
+      if (data.code !== ApiCode.OK) throw new Error(data.message || 'Could not restore the file');
+      pushToast({ message: `${name} was restored`, tone: 'success' }, 4000);
+    } catch (err) {
+      pushToast({ message: err instanceof Error ? err.message : 'Could not restore the file', tone: 'error' });
+    }
+  };
+
+  // Info: (20261106 - Luphia) 上傳者 / 房主切換單一檔案的下載權限
+  const handleToggleDownload = async (name: string, allow: boolean) => {
+    const meta = filesRef.current.find(f => f.filename === name);
+    if (!meta) return;
+    try {
+      const res = await fetch(`/api/v1/room/${roomId}`, {
+        method: 'POST',
+        headers: memberHeaders({ 'Content-Type': 'application/json' }, chatPassword),
+        body: JSON.stringify({ ...meta, allowDownload: allow }),
+      });
+      const data = await res.json();
+      if (data.code !== ApiCode.OK) throw new Error(data.message || 'Could not change downloads');
+      const saved = (data.payload?.metadata as ILariaMetadata) || { ...meta, allowDownload: allow };
+      const list = filesRef.current.map(f => (f.filename === name ? saved : f));
+      filesRef.current = list;
+      setFiles(list);
+    } catch (err) {
+      pushToast({ message: err instanceof Error ? err.message : 'Could not change downloads', tone: 'error' });
+    }
+  };
+
+  const getFileActions = (file: ILariaMetadata): IFileAction[] => {
+    const actions: IFileAction[] = [{ label: 'Open', onSelect: () => openFile(file.filename) }];
+    if (isDownloadAllowed(file)) actions.push({ label: 'Download', onSelect: () => handleDownload(file.filename) });
+    actions.push({ label: 'Copy link', onSelect: () => handleCopyLink(file.filename) });
+    if (canManageFile(file)) {
+      const allowed = isDownloadAllowed(file);
+      actions.push({
+        label: allowed ? 'Turn off downloads' : 'Turn on downloads',
+        onSelect: () => handleToggleDownload(file.filename, !allowed),
+      });
+      actions.push({ label: 'Delete from room', onSelect: () => handleDelete(file.filename), danger: true });
+    }
+    return actions;
+  };
+
+  const handleSettingsChange = async (patch: Record<string, unknown>) => {
+    setSettingsSaving(true);
+    setSettingsError('');
+    try {
+      const res = await fetch(`/api/v1/room/${roomId}/settings`, {
+        method: 'PATCH',
+        headers: memberHeaders({ 'Content-Type': 'application/json' }, chatPassword),
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (data.code !== ApiCode.OK) throw new Error(data.message || 'Could not save settings');
+      if (data.payload) {
+        const localNow = Date.now();
+        setSettings(data.payload as IRoomSettings);
+        setClockOffset((data.payload.serverTime ?? localNow) - localNow);
+      }
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : 'Could not save settings');
+    } finally {
+      setSettingsSaving(false);
+    }
+  };
+
+  const handlePickedFiles = (list: FileList | null) => {
+    if (!list || list.length === 0) return;
+    if (!settings?.canUpload) {
+      pushToast({ message: 'Only the room owner can add files here.', tone: 'error' });
+      return;
+    }
+    uploadFiles(Array.from(list));
   };
 
   const runFind = (backwards = false) => {
@@ -491,16 +686,17 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     });
     return result;
   }, [files, loads]);
-  const expiryText =
-    expiry && now > 0 ? (expiry.expiresAt ? formatRemaining(expiry.expiresAt - (now + expiry.clockOffset)) : null) : null;
+  const expiresAt = settings?.expiresAt ?? null;
+  const expiryText = settings && now > 0 && expiresAt ? formatRemaining(expiresAt - (now + clockOffset)) : null;
 
   const activeFile = files?.find(f => f.filename === activeName) || null;
   const activeKind = activeFile ? getFileKind(activeFile.filename, activeFile.mimeType) : null;
   const activeOutline = activeName ? outlines[activeName] || [] : [];
-  const sidePanelTab = activeFile ? sideTab : 'chat';
+  const sidePanelTab: TSidePanelTab =
+    sideTab === 'settings' && isOwner ? 'settings' : activeFile ? (sideTab === 'settings' ? 'details' : sideTab) : 'chat';
   const unreadMessages = sidePanelTab === 'chat' ? 0 : Math.max(0, othersMessageCount - seenMessages);
 
-  const switchSidePanel = (tab: 'details' | 'chat') => {
+  const switchSidePanel = (tab: TSidePanelTab) => {
     if (sidePanelTab === 'chat' || tab === 'chat') setSeenMessages(othersMessageCount);
     setSideTab(tab);
   };
@@ -544,12 +740,12 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         </Link>
         <span className="font-mono text-xs tracking-[0.06em] text-slate-300">#{roomId}</span>
       </div>
-      {expiry && now > 0 && (
+      {settings && now > 0 && (
         <p
-          className={`-mt-2 flex items-center gap-1.5 px-1.5 text-xs ${expiry.expiresAt && expiry.expiresAt - (now + expiry.clockOffset) < 3600000 ? 'text-amber-300' : 'text-slate-400'}`}
+          className={`-mt-2 flex items-center gap-1.5 px-1.5 text-xs ${expiresAt && expiresAt - (now + clockOffset) < 3600000 ? 'text-amber-300' : 'text-slate-400'}`}
         >
           <ClockIcon className="h-3.5 w-3.5" />
-          {expiry.expiresAt ? formatRemaining(expiry.expiresAt - (now + expiry.clockOffset)) : 'No expiry set'}
+          {expiresAt ? formatRemaining(expiresAt - (now + clockOffset)) : 'No expiry set'}
         </p>
       )}
 
@@ -589,7 +785,10 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
                 className={`flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${isActive ? 'bg-slate-800 font-semibold text-white' : 'text-slate-300 hover:bg-white/5'}`}
               >
                 <span className={`h-2 w-2 shrink-0 rounded-sm ${FILE_KIND_DOT[kind]}`} aria-hidden="true" />
-                <span className="min-w-0 flex-1 truncate">{f.filename}</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate">{f.filename}</span>
+                  {myUploaderId && f.uploaderId === myUploaderId && <span className="block text-[10px] font-normal text-blue-300">You</span>}
+                </span>
                 <span className="shrink-0 font-mono text-[10px] text-slate-500">{formatBytes(f.originalFileSize)}</span>
               </button>
             );
@@ -664,6 +863,16 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     if (!activeFile) {
       return (
         <RoomActivity
+          roomId={roomId}
+          roomName={settings?.name || `Room ${roomId}`}
+          uploadPolicy={settings?.uploadPolicy ?? 'everyone'}
+          isOwner={isOwner}
+          canUpload={settings?.canUpload ?? false}
+          myUploaderId={myUploaderId}
+          onUpload={() => fileInputRef.current?.click()}
+          getActions={getFileActions}
+          canDelete={canManageFile}
+          onDelete={file => handleDelete(file.filename)}
           files={files || []}
           uploads={chat.uploads}
           online={chat.online}
@@ -837,7 +1046,39 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         {navigation}
       </nav>
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <main
+        className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+        onDragOver={e => {
+          if (!settings?.canUpload || !e.dataTransfer.types.includes('Files')) return;
+          e.preventDefault();
+          setDragActive(true);
+        }}
+        onDragLeave={e => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragActive(false);
+        }}
+        onDrop={e => {
+          if (!settings?.canUpload) return;
+          e.preventDefault();
+          setDragActive(false);
+          handlePickedFiles(e.dataTransfer.files);
+        }}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          aria-label="Upload files"
+          onChange={e => {
+            handlePickedFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
+        {dragActive && (
+          <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border-2 border-dashed border-blue-500 bg-blue-950/70 text-sm font-semibold text-blue-100">
+            Drop files to upload to this room
+          </div>
+        )}
         {openTabs.length > 0 && (
           <div role="tablist" aria-label="Open files" className="flex items-end gap-0.5 overflow-x-auto border-b border-white/10 bg-[#0D1424] px-3 pt-2.5">
             {openTabs.map((name, index) => {
@@ -910,6 +1151,17 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               <span className="ml-1.5 font-normal text-slate-400">{chat.status === 'connected' ? chat.online : ''}</span>
               {unreadBadge}
             </button>
+            {isOwner && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidePanelTab === 'settings'}
+                onClick={() => switchSidePanel('settings')}
+                className={`-mb-px h-10 border-b-2 px-3 text-xs font-semibold ${sidePanelTab === 'settings' ? 'border-blue-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+              >
+                Settings
+              </button>
+            )}
           </div>
           {inspectorOpen && (
             <button
@@ -938,7 +1190,15 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               onDownload={() => handleDownload(activeFile.filename)}
               onCopyLink={() => handleCopyLink(activeFile.filename)}
               onPrint={() => viewerRef.current?.print()}
+              uploaderLabel={uploaderLabel(activeFile)}
+              canManage={canManageFile(activeFile)}
+              onToggleDownload={allow => handleToggleDownload(activeFile.filename, allow)}
+              onDelete={() => handleDelete(activeFile.filename)}
             />
+          </div>
+        ) : sidePanelTab === 'settings' && settings ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <RoomSettingsPanel key={settings.name} settings={settings} saving={settingsSaving} error={settingsError} onChange={handleSettingsChange} />
           </div>
         ) : (
           <div className="min-h-0 flex-1">
@@ -949,36 +1209,45 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
       {toasts.length > 0 && (
         <div className="fixed bottom-4 left-4 z-50 flex w-[min(340px,calc(100vw-2rem))] flex-col gap-2" role="status" aria-live="polite">
-          {toasts.map(toast => (
-            <div
-              key={toast.id}
-              className="flex items-center gap-3 rounded-[14px] border border-emerald-800 bg-emerald-950 px-3.5 py-3 shadow-2xl shadow-black/50"
-            >
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <circle cx="12" cy="12" r="9" />
-                <path d="m8 12 3 3 5-6" />
-              </svg>
-              <span className="min-w-0 flex-1 truncate text-[13px] text-emerald-50">{toast.filename} is ready</span>
-              <button
-                type="button"
-                onClick={() => {
-                  openFile(toast.filename);
-                  dismissToast(toast.id);
-                }}
-                className="h-8 shrink-0 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-500"
-              >
-                Open
-              </button>
-              <button
-                type="button"
-                aria-label="Dismiss"
-                onClick={() => dismissToast(toast.id)}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-emerald-200 hover:bg-white/10"
-              >
-                <XIcon className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
+          {toasts.map(toast => {
+            const tone =
+              toast.tone === 'success'
+                ? { box: 'border-emerald-800 bg-emerald-950', text: 'text-emerald-50', button: 'bg-emerald-600 hover:bg-emerald-500', close: 'text-emerald-200' }
+                : toast.tone === 'error'
+                  ? { box: 'border-red-800 bg-red-950', text: 'text-red-50', button: 'bg-red-600 hover:bg-red-500', close: 'text-red-200' }
+                  : { box: 'border-white/15 bg-slate-800', text: 'text-slate-100', button: 'bg-blue-600 hover:bg-blue-500', close: 'text-slate-300' };
+            return (
+              <div key={toast.id} className={`flex items-center gap-3 rounded-[14px] border px-3.5 py-3 shadow-2xl shadow-black/50 ${tone.box}`}>
+                {toast.tone === 'success' && (
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="m8 12 3 3 5-6" />
+                  </svg>
+                )}
+                <span className={`min-w-0 flex-1 truncate text-[13px] ${tone.text}`}>{toast.message}</span>
+                {toast.actionLabel && toast.onAction && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toast.onAction?.();
+                      dismissToast(toast.id);
+                    }}
+                    className={`h-8 shrink-0 rounded-lg px-3 text-xs font-semibold text-white ${tone.button}`}
+                  >
+                    {toast.actionLabel}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  onClick={() => dismissToast(toast.id)}
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg hover:bg-white/10 ${tone.close}`}
+                >
+                  <XIcon className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 

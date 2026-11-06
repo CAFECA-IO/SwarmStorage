@@ -1,103 +1,65 @@
 import { NextRequest } from 'next/server';
-import { promises as fs } from 'fs';
-import path from 'path';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
-import { checkRoomAccess, isValidRoomId } from '@/lib/room_access';
-import { announceFile } from '@/lib/chat_hub';
+import { checkRoomAccess, memberHashFromRequest } from '@/lib/room_access';
+import { listRoomFiles, saveFileMetadata, type TFileMetadata } from '@/lib/room_store';
 
-const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
+export const dynamic = 'force-dynamic';
 
+/**
+ * Info: (20261106 - Luphia) 處理 POST /api/v1/room/[room_id]
+ * 新增或更新檔案 metadata
+ * - 需要房間存取權 (密碼或房主)，並依房間的上傳權限檢查
+ * - 記錄上傳者代號；同名檔案只有上傳者或房主可覆寫 (新上傳會自動改名)
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ room_id: string }> }
 ) {
   try {
     const { room_id: roomId } = await params;
-    if (!isValidRoomId(roomId)) {
-      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid room number");
-    }
-    const roomPath = path.join(ROOM_BASE_DIR, roomId);
+    const memberHash = memberHashFromRequest(request.headers);
+    const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'), memberHash);
+    if (!access.ok) return jsonFail(access.code, access.message);
 
-    // Info: (20260113 - Luphia) Validate room exists
+    let metadata: TFileMetadata;
     try {
-      await fs.access(roomPath);
+      metadata = await request.json();
     } catch {
-      return jsonFail(ApiCode.NOT_FOUND, "Room not found");
+      return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid metadata');
+    }
+    if (!metadata || typeof metadata !== 'object' || !Array.isArray(metadata.shards)) {
+      return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid metadata');
     }
 
-    // Info: (20260113 - Luphia) Parse Metadata
-    const metadata = await request.json();
-    if (!metadata || typeof metadata.filename !== 'string' || !metadata.filename) {
-      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid metadata");
+    const uploadIdHeader = request.headers.get('x-upload-id');
+    const uploadId = uploadIdHeader && /^[A-Za-z0-9_-]{6,64}$/.test(uploadIdHeader) ? uploadIdHeader : null;
+    const result = await saveFileMetadata(roomId, access.roomPath, access.config, memberHash, metadata, uploadId);
+    if (!result.ok) {
+      return jsonFail(result.status === 'forbidden' ? ApiCode.FORBIDDEN : ApiCode.VALIDATION_ERROR, result.message);
     }
-    // Info: (20261105 - Luphia) 檔名只能是單一檔名，避免路徑穿越或覆寫房間設定檔
-    const reservedNames = ['_config', 'metadata', 'password.hash', 'expiration'];
-    if (
-      /[\\/\0]/.test(metadata.filename) ||
-      metadata.filename.startsWith('.') ||
-      metadata.filename.length > 255 ||
-      reservedNames.includes(metadata.filename)
-    ) {
-      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid filename");
-    }
-
-    const filename = `${metadata.filename}.json`;
-    const filePath = path.join(roomPath, filename);
-
-    // Info: (20260113 - Luphia) Save to file
-    await fs.writeFile(filePath, JSON.stringify(metadata, null, 2));
-
-    // Info: (20261105 - Luphia) 即時通知房間內的人：新增或更新的檔案 (x-upload-id 對應進行中的上傳)
-    const uploadId = request.headers.get('x-upload-id');
-    announceFile(roomId, metadata, uploadId && /^[A-Za-z0-9_-]{6,64}$/.test(uploadId) ? uploadId : null);
-
-    return jsonOk({ filename }, "Metadata saved to room");
-
+    return jsonOk({ filename: result.metadata.filename, metadata: result.metadata }, 'Metadata saved to room');
   } catch (error) {
     console.error('[Room API] Error saving metadata:', error);
-    return jsonFail(ApiCode.SERVER_ERROR, "Internal Server Error");
+    return jsonFail(ApiCode.SERVER_ERROR, 'Internal Server Error');
   }
 }
 
+/**
+ * Info: (20260113 - Luphia) 處理 GET /api/v1/room/[room_id]：房間內的檔案 metadata
+ */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ room_id: string }> }
 ) {
   try {
     const { room_id: roomId } = await params;
-
-    // Info: (20261105 - Luphia) 共用房間存取檢查：房號格式、存在、到期、密碼
-    const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'));
-    if (!access.ok) {
-      return jsonFail(access.code, access.message);
-    }
-    const { roomPath } = access;
-
-    const files = await fs.readdir(roomPath);
-    const metadataList = [];
-
-    for (const file of files) {
-      if (file === '_config.json') continue; // Info: (20260113 - Luphia) Skip config file
-      // Info: (20260113 - Luphia) Legacy skilling (optional, but good for safety)
-      if (file === 'password.hash') continue;
-      if (file === 'expiration.json') continue;
-
-      if (file.endsWith('.json') && file !== 'metadata.json') { // Info: (20260113 - Luphia) Exclude folder metadata if any
-        try {
-          const content = await fs.readFile(path.join(roomPath, file), 'utf-8');
-          const metadata = JSON.parse(content);
-          metadataList.push(metadata);
-        } catch (err) {
-          console.warn(`[Room API] Failed to read/parse ${file}:`, err);
-        }
-      }
-    }
-
-    return jsonOk(metadataList, "OK");
-
+    // Info: (20261105 - Luphia) 共用房間存取檢查：房號格式、存在、到期、密碼 (房主免密碼)
+    const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'), memberHashFromRequest(request.headers));
+    if (!access.ok) return jsonFail(access.code, access.message);
+    return jsonOk(await listRoomFiles(access.roomPath), 'OK');
   } catch (error) {
     console.error('[Room API] Error listing files:', error);
-    return jsonFail(ApiCode.SERVER_ERROR, "Internal Server Error");
+    return jsonFail(ApiCode.SERVER_ERROR, 'Internal Server Error');
   }
 }

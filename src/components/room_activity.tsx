@@ -2,6 +2,11 @@ import type { ILariaMetadata } from '@/lib/file_operator';
 import type { IUploadStatus } from '@/lib/chat_hub';
 import { getExtension, getFileKind, type TFileKind } from '@/lib/file_types';
 import { formatBytes } from '@/lib/utils';
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import Link from 'next/link';
+import FileActionsMenu, { type IFileAction } from '@/components/file_actions_menu';
+import RoomSharePanel from '@/components/room_share_panel';
+import { ShareIcon, UploadIcon } from '@/components/icons';
 
 const SHARDS_PER_STRIPE = 8;
 const DATA_SHARDS = 5;
@@ -9,7 +14,6 @@ const DATA_SHARDS = 5;
 const MAX_SHARD_CELLS = 48;
 // Info: (20261105 - Luphia) 進房後新增的檔案在 10 分鐘內標示為新檔案
 const NEW_FILE_WINDOW_MS = 10 * 60 * 1000;
-const MAX_RECENT_FILES = 12;
 
 const KIND_TILE: Record<TFileKind, string> = {
   html: 'bg-orange-950 text-orange-300',
@@ -134,7 +138,105 @@ function UploadCard({
   );
 }
 
+const SWIPE_WIDTH = 96;
+
+/**
+ * Info: (20261106 - Luphia)
+ * 手機版檔案列：自己上傳的檔案可向左滑出「刪除」；其他操作在 ⋯ 選單 (鍵盤與螢幕閱讀器可用)
+ */
+function SwipeRow({
+  children,
+  canDelete,
+  onDelete,
+  onOpen,
+  label,
+}: {
+  children: React.ReactNode;
+  canDelete: boolean;
+  onDelete: () => void;
+  onOpen: () => void;
+  label: string;
+}) {
+  const [offset, setOffset] = useState(0);
+  const drag = useRef<{ startX: number; base: number; moved: boolean } | null>(null);
+  // Info: (20261106 - Luphia) 拖曳結束後緊接的 click 不視為開啟檔案
+  const movedRef = useRef(false);
+
+  const onPointerDown = (e: ReactPointerEvent) => {
+    if (!canDelete) return;
+    drag.current = { startX: e.clientX, base: offset, moved: false };
+    movedRef.current = false;
+  };
+  const onPointerMove = (e: ReactPointerEvent) => {
+    const state = drag.current;
+    if (!state) return;
+    const dx = e.clientX - state.startX;
+    if (Math.abs(dx) > 6) {
+      state.moved = true;
+      movedRef.current = true;
+    }
+    setOffset(Math.max(-SWIPE_WIDTH, Math.min(0, state.base + dx)));
+  };
+  const onPointerUp = () => {
+    const state = drag.current;
+    drag.current = null;
+    if (!state) return;
+    setOffset(prev => (prev < -SWIPE_WIDTH / 2 ? -SWIPE_WIDTH : 0));
+  };
+
+  return (
+    <li className="relative overflow-hidden border-b border-white/10 bg-red-900/60 last:border-0">
+      {canDelete && (
+        <button
+          type="button"
+          tabIndex={offset === 0 ? -1 : 0}
+          onClick={() => {
+            setOffset(0);
+            onDelete();
+          }}
+          className="absolute inset-y-0 right-0 w-24 bg-red-600 text-[13px] font-bold text-white"
+        >
+          Delete
+        </button>
+      )}
+      <div
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        className="relative flex min-h-16 touch-pan-y items-center gap-3 bg-slate-950 px-1 transition-transform duration-150"
+        style={{ transform: `translateX(${offset}px)` }}
+      >
+        <button
+          type="button"
+          aria-label={`Open ${label}`}
+          onClick={() => {
+            if (movedRef.current) {
+              movedRef.current = false;
+              return;
+            }
+            if (offset !== 0) {
+              setOffset(0);
+              return;
+            }
+            onOpen();
+          }}
+          className="flex min-w-0 flex-1 items-center gap-3 py-2 text-left"
+        >
+          {children}
+        </button>
+      </div>
+    </li>
+  );
+}
+
 interface IRoomActivityProps {
+  roomId: string;
+  roomName: string;
+  uploadPolicy: 'owner' | 'everyone';
+  isOwner: boolean;
+  canUpload: boolean;
+  myUploaderId: string | null;
   files: ILariaMetadata[];
   uploads: IUploadStatus[];
   online: number;
@@ -146,13 +248,24 @@ interface IRoomActivityProps {
   now: number;
   onToggleWatch: (uploadId: string) => void;
   onOpenFile: (filename: string) => void;
+  onUpload: () => void;
+  getActions: (file: ILariaMetadata) => IFileAction[];
+  canDelete: (file: ILariaMetadata) => boolean;
+  onDelete: (file: ILariaMetadata) => void;
 }
 
 /**
  * Info: (20261105 - Luphia)
  * 房間首頁 (C 方案)：進房即看到正在上傳與最近新增的檔案，內容即時更新
+ * Info: (20261106 - Luphia) 加入房間名稱、上傳權限、上傳 / 分享按鈕與檔案操作 (自己的檔案可刪除)
  */
 export default function RoomActivity({
+  roomId,
+  roomName,
+  uploadPolicy,
+  isOwner,
+  canUpload,
+  myUploaderId,
   files,
   uploads,
   online,
@@ -164,32 +277,87 @@ export default function RoomActivity({
   now,
   onToggleWatch,
   onOpenFile,
+  onUpload,
+  getActions,
+  canDelete,
+  onDelete,
 }: IRoomActivityProps) {
+  const [shareOpen, setShareOpen] = useState(false);
   const uploading = uploads.filter(u => u.status === 'uploading').length;
-  const recent = [...files]
-    .sort((a, b) => (newFiles[b.filename] ?? b.uploadedAt ?? 0) - (newFiles[a.filename] ?? a.uploadedAt ?? 0))
-    .slice(0, MAX_RECENT_FILES);
+  const recent = [...files].sort(
+    (a, b) => (newFiles[b.filename] ?? b.uploadedAt ?? 0) - (newFiles[a.filename] ?? a.uploadedAt ?? 0)
+  );
+  const isMine = (file: ILariaMetadata) => !!myUploaderId && file.uploaderId === myUploaderId;
+  const uploaderLabel = (file: ILariaMetadata) => (isMine(file) ? 'You' : file.uploaderId ? 'Someone else' : 'Earlier upload');
 
   return (
     <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-8 sm:py-7">
-      <div className="mx-auto flex max-w-5xl flex-col gap-7">
+      <div className="mx-auto flex max-w-5xl flex-col gap-6">
         <header className="flex flex-wrap items-end justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold text-slate-100">Room activity</h1>
-            <p className="mt-1.5 text-[13px] text-slate-400">
-              Updates live while you are here{expiryText ? ` · ${expiryText.toLowerCase()}` : ''}
-            </p>
+          <div className="min-w-0">
+            <Link href="/" className="text-xs text-slate-400 hover:text-slate-200">
+              ← All rooms
+            </Link>
+            <h1 className="mt-1.5 text-2xl font-bold text-slate-100">
+              {roomName} <span className="font-mono text-sm font-normal text-slate-400">#{roomId}</span>
+            </h1>
+            <div className="mt-2.5 flex flex-wrap gap-1.5 text-[11px]">
+              <span className="rounded-md bg-slate-800 px-2 py-1 text-slate-300">
+                {uploadPolicy === 'everyone' ? 'Everyone uploads' : 'Owner uploads only'}
+              </span>
+              <span className="rounded-md bg-slate-800 px-2 py-1 text-slate-300">Delete your own files</span>
+              {isOwner && <span className="rounded-md bg-blue-950 px-2 py-1 text-blue-200">You own this room</span>}
+              {expiryText && <span className="rounded-md bg-slate-800 px-2 py-1 text-slate-300">{expiryText}</span>}
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full border border-white/10 px-3 py-1.5 text-slate-300">{files.length} ready</span>
-            <span className={`rounded-full border px-3 py-1.5 ${uploading ? 'border-blue-800 bg-blue-950 text-blue-200' : 'border-white/10 text-slate-300'}`}>
-              {uploading} uploading
-            </span>
-            <span className="rounded-full border border-white/10 px-3 py-1.5 text-slate-300">
-              {online} {online === 1 ? 'person' : 'people'} here
-            </span>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              aria-expanded={shareOpen}
+              onClick={() => setShareOpen(v => !v)}
+              className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 px-4 text-[13px] font-semibold text-slate-200 hover:bg-white/5"
+            >
+              <ShareIcon className="h-4 w-4" />
+              Share
+            </button>
+            {canUpload && (
+              <button
+                type="button"
+                onClick={onUpload}
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white hover:bg-blue-500"
+              >
+                <UploadIcon className="h-4 w-4" />
+                Upload files
+              </button>
+            )}
           </div>
         </header>
+
+        {shareOpen && (
+          <div className="max-w-md">
+            <RoomSharePanel roomNumber={roomId} />
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full border border-white/10 px-3 py-1.5 text-slate-300">{files.length} ready</span>
+          <span className={`rounded-full border px-3 py-1.5 ${uploading ? 'border-blue-800 bg-blue-950 text-blue-200' : 'border-white/10 text-slate-300'}`}>
+            {uploading} uploading
+          </span>
+          <span className="rounded-full border border-white/10 px-3 py-1.5 text-slate-300">
+            {online} {online === 1 ? 'person' : 'people'} here
+          </span>
+        </div>
+
+        {canUpload ? (
+          <p className="hidden rounded-[14px] border border-dashed border-slate-700 p-3.5 text-center text-[13px] text-slate-400 md:block">
+            Drop files anywhere on this page to add them to the room
+          </p>
+        ) : (
+          <p className="rounded-[14px] border border-white/10 bg-white/5 p-3 text-center text-[13px] text-slate-400">
+            Only the room owner can add files here.
+          </p>
+        )}
 
         {uploads.length > 0 && (
           <section aria-labelledby="activity-uploading" className="flex flex-col gap-3">
@@ -213,47 +381,86 @@ export default function RoomActivity({
         {recent.length > 0 && (
           <section aria-labelledby="activity-recent" className="flex flex-col gap-3">
             <h2 id="activity-recent" className="text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">
-              Recently added
+              Files
             </h2>
-            <div className="grid grid-cols-2 gap-3.5 lg:grid-cols-3 2xl:grid-cols-4">
+
+            {/* Info: (20261106 - Luphia) 桌面版：卡片 + ⋯ 選單 */}
+            <div className="hidden grid-cols-2 gap-3.5 md:grid lg:grid-cols-3 2xl:grid-cols-4">
               {recent.map(file => {
                 const kind = getFileKind(file.filename, file.mimeType);
                 const addedAt = newFiles[file.filename];
                 const isNew = addedAt !== undefined && now - addedAt < NEW_FILE_WINDOW_MS;
                 const timestamp = addedAt ?? file.uploadedAt;
                 const thumbnail = thumbnails[file.filename];
+                const mine = isMine(file);
                 return (
-                  <button
+                  <div
                     key={file.filename}
-                    type="button"
-                    onClick={() => onOpenFile(file.filename)}
-                    className={`group overflow-hidden rounded-[14px] border bg-[#0B1222] text-left transition-colors hover:bg-[#0F182C] ${isNew ? 'border-emerald-700' : 'border-white/10'}`}
+                    className={`group rounded-[14px] border bg-[#0B1222] transition-colors hover:bg-[#0F182C] ${mine ? 'border-blue-800' : isNew ? 'border-emerald-700' : 'border-white/10'}`}
                   >
-                    <span className="flex h-[110px] items-center justify-center overflow-hidden bg-slate-900">
+                    <button
+                      type="button"
+                      onClick={() => onOpenFile(file.filename)}
+                      aria-label={`Open ${file.filename}`}
+                      className="flex h-[110px] w-full items-center justify-center overflow-hidden rounded-t-[14px] bg-slate-900"
+                    >
                       {thumbnail ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={thumbnail} alt="" className="h-full w-full object-cover" />
                       ) : (
                         <TypeTile filename={file.filename} kind={kind} className="h-14 w-14 text-xs" />
                       )}
-                    </span>
-                    <span className="flex flex-col gap-1 px-3 py-2.5">
-                      <span className="truncate text-[13px] font-semibold text-slate-100">{file.filename}</span>
-                      <span className={`text-[11px] ${isNew ? 'text-emerald-300' : 'text-slate-400'}`}>
-                        {isNew ? `Ready · ${formatRelative(addedAt, now)}` : `${timestamp && now ? `${formatRelative(timestamp, now)} · ` : ''}${formatBytes(file.originalFileSize)}`}
-                      </span>
-                    </span>
-                  </button>
+                    </button>
+                    <div className="flex items-center gap-2 px-3 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-semibold text-slate-100">{file.filename}</p>
+                        <p className={`text-[11px] ${isNew ? 'text-emerald-300' : mine ? 'text-blue-300' : 'text-slate-400'}`}>
+                          {isNew
+                            ? `Ready · ${formatRelative(addedAt, now)}`
+                            : `${uploaderLabel(file)} · ${timestamp && now ? `${formatRelative(timestamp, now)} · ` : ''}${formatBytes(file.originalFileSize)}`}
+                        </p>
+                      </div>
+                      <FileActionsMenu filename={file.filename} actions={getActions(file)} highlighted={mine} />
+                    </div>
+                  </div>
                 );
               })}
             </div>
+
+            {/* Info: (20261106 - Luphia) 手機版：清單，自己的檔案可左滑刪除 */}
+            <ul className="md:hidden">
+              {recent.map(file => {
+                const kind = getFileKind(file.filename, file.mimeType);
+                const mine = isMine(file);
+                return (
+                  <SwipeRow
+                    key={file.filename}
+                    label={file.filename}
+                    canDelete={canDelete(file)}
+                    onDelete={() => onDelete(file)}
+                    onOpen={() => onOpenFile(file.filename)}
+                  >
+                    <TypeTile filename={file.filename} kind={kind} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-slate-100">{file.filename}</span>
+                      <span className={`text-xs ${mine ? 'text-blue-300' : 'text-slate-400'}`}>
+                        {uploaderLabel(file)} · {formatBytes(file.originalFileSize)}
+                      </span>
+                    </span>
+                  </SwipeRow>
+                );
+              })}
+            </ul>
+            <p className="text-xs text-slate-500 md:hidden">Swipe left on a file you uploaded to delete it.</p>
           </section>
         )}
 
         {files.length === 0 && uploads.length === 0 && (
           <div className="rounded-2xl border border-dashed border-white/10 px-6 py-12 text-center">
             <p className="text-sm font-semibold text-slate-200">Nothing here yet</p>
-            <p className="mt-1 text-[13px] text-slate-400">Files appear here as soon as someone starts uploading.</p>
+            <p className="mt-1 text-[13px] text-slate-400">
+              {canUpload ? 'Upload files or drop them here to get started.' : 'Files appear here as soon as the owner uploads them.'}
+            </p>
           </div>
         )}
       </div>

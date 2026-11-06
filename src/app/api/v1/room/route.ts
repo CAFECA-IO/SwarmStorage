@@ -1,83 +1,57 @@
-import { promises as fs } from 'fs';
-import path from 'path';
+import { NextRequest } from 'next/server';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
-import { onlineCount } from '@/lib/chat_hub';
+import { memberHashFromRequest } from '@/lib/room_access';
+import { createRoom, listRooms } from '@/lib/room_store';
 
-const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
+export const dynamic = 'force-dynamic';
 
-export async function POST() {
+/**
+ * Info: (20261106 - Luphia) 處理 GET /api/v1/room
+ * 房間清單：公開的房間、自己建立的房間 (x-member-key)、以及 include=房號,房號 (最近造訪)
+ */
+export async function GET(request: NextRequest) {
   try {
-    // Info: (20260113 - Luphia) Ensure room directory exists
+    const include = (request.nextUrl.searchParams.get('include') || '').split(',').slice(0, 50);
+    const rooms = await listRooms(memberHashFromRequest(request.headers), include);
+    return jsonOk({ rooms, serverTime: Date.now() }, 'OK', { headers: { 'Cache-Control': 'no-store' } });
+  } catch (error) {
+    console.error('[Room] Error listing rooms:', error);
+    return jsonFail(ApiCode.SERVER_ERROR, 'Internal Server Error');
+  }
+}
+
+/**
+ * Info: (20261106 - Luphia) 處理 POST /api/v1/room
+ * 建立房間 (需要 x-member-key，建立者即為房主)
+ * body: { name, listed, uploadPolicy: 'owner' | 'everyone', allowDownload, password?, minutes }
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const ownerHash = memberHashFromRequest(request.headers);
+    if (!ownerHash) return jsonFail(ApiCode.UNAUTHORIZED, 'Missing member key');
+
+    let body: Record<string, unknown> = {};
     try {
-      await fs.access(ROOM_BASE_DIR);
+      body = (await request.json()) ?? {};
     } catch {
-      await fs.mkdir(ROOM_BASE_DIR, { recursive: true });
+      return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid JSON body');
     }
 
-    // Info: (20260113 - Luphia) Clean up empty rooms
-    try {
-      const items = await fs.readdir(ROOM_BASE_DIR);
-      for (const item of items) {
-        const itemPath = path.join(ROOM_BASE_DIR, item);
-        try {
-          const stat = await fs.stat(itemPath);
-          if (stat.isDirectory()) {
-            // Info: (20260113 - Luphia) Check for expiration
-            try {
-              const configPath = path.join(itemPath, '_config.json');
-              const configContent = await fs.readFile(configPath, 'utf-8');
-              const config = JSON.parse(configContent);
-
-              if (config.expiration?.expiresAt && Date.now() > config.expiration.expiresAt) {
-                await fs.rm(itemPath, { recursive: true, force: true });
-                console.log(`[Room] Removed expired room: ${item}`);
-                continue;
-              }
-            } catch {
-              // Info: (20260113 - Luphia) Ignore config errors (file missing or invalid json)
-            }
-
-            const files = await fs.readdir(itemPath);
-            // Info: (20261105 - Luphia) 仍有人在聊天的空房間不清除
-            if (files.filter(f => f !== '_config.json').length === 0 && onlineCount(item) === 0) {
-              await fs.rmdir(itemPath);
-              console.log(`[Room] Removed empty room: ${item}`);
-            }
-          }
-        } catch (err) {
-          console.warn(`[Room] Failed to check/remove ${item}:`, err);
-        }
-      }
-    } catch (cleanupErr) {
-      console.warn('[Room] Cleanup error:', cleanupErr);
-    }
-
-    let roomNumber = '';
-    let attempts = 0;
-    const maxAttempts = 100;
-
-    while (attempts < maxAttempts) {
-      // Info: (20260113 - Luphia) Generate 6-digit random number (000000 - 999999)
-      roomNumber = Math.floor(Math.random() * 1000000).toString().padStart(6, '0');
-      const roomPath = path.join(ROOM_BASE_DIR, roomNumber);
-
-      try {
-        await fs.access(roomPath);
-        // Info: (20260113 - Luphia) If access succeeds, folder exists, try again
-        attempts++;
-      } catch {
-        // Info: (20260113 - Luphia) If access fails, folder does not exist, create it
-        await fs.mkdir(roomPath);
-        console.log(`[Room] Created new room: ${roomNumber}`);
-        return jsonOk({ roomNumber }, "Room created successfully");
-      }
-    }
-
-    return jsonFail(ApiCode.SERVER_ERROR, "Failed to generate a unique room number");
-
+    const result = await createRoom({
+      name: body.name,
+      listed: body.listed,
+      uploadPolicy: body.uploadPolicy,
+      allowDownload: body.allowDownload,
+      password: body.password,
+      minutes: body.minutes,
+      ownerHash,
+    });
+    if ('error' in result) return jsonFail(ApiCode.VALIDATION_ERROR, result.error);
+    console.log(`[Room] Created new room: ${result.roomNumber}`);
+    return jsonOk(result, 'Room created successfully');
   } catch (error) {
     console.error('[Room] Error creating room:', error);
-    return jsonFail(ApiCode.SERVER_ERROR, "Internal Server Error");
+    return jsonFail(ApiCode.SERVER_ERROR, 'Internal Server Error');
   }
 }

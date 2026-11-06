@@ -48,6 +48,8 @@ export type TChatEvent =
   | { type: 'upload'; upload: IUploadStatus }
   | { type: 'upload-removed'; uploadId: string; reason: 'failed' | 'cancelled' | 'interrupted' }
   | { type: 'file'; metadata: Record<string, unknown>; uploadId: string | null }
+  | { type: 'file-removed'; filename: string }
+  | { type: 'room-settings'; settings: Record<string, unknown> }
   | { type: 'message'; message: IChatMessage }
   | { type: 'presence'; action: 'join' | 'leave'; member: IChatMember; online: number }
   | { type: 'expired' }
@@ -55,6 +57,8 @@ export type TChatEvent =
 
 interface IChatToken extends IChatMember {
   roomId: string;
+  // Info: (20261106 - Luphia) 成員身分 (瀏覽器金鑰雜湊)，用於上傳權限判斷；未提供時為 null
+  memberHash: string | null;
   expiresAt: number;
   sentAt: number[];
 }
@@ -125,7 +129,11 @@ const broadcast = (roomId: string, event: TChatEvent) => {
  * Info: (20261105 - Luphia)
  * 加入房間聊天，取得 token 與系統配發的匿名暱稱
  */
-export function issueChatToken(roomId: string, roomExpiresAt: number | null): { token: string; member: IChatMember; expiresAt: number } {
+export function issueChatToken(
+  roomId: string,
+  roomExpiresAt: number | null,
+  memberHash: string | null = null
+): { token: string; member: IChatMember; expiresAt: number } {
   purgeExpiredTokens();
   const expiresAt = Math.min(roomExpiresAt ?? Number.POSITIVE_INFINITY, Date.now() + TOKEN_MAX_TTL_MS);
   const taken = new Set(membersOf(roomId).map(m => m.nickname));
@@ -135,7 +143,7 @@ export function issueChatToken(roomId: string, roomExpiresAt: number | null): { 
 
   const token = randomBytes(24).toString('base64url');
   const member: IChatMember = { memberId: randomUUID(), nickname };
-  state.tokens.set(token, { ...member, roomId, expiresAt, sentAt: [] });
+  state.tokens.set(token, { ...member, roomId, memberHash, expiresAt, sentAt: [] });
   return { token, member, expiresAt };
 }
 
@@ -383,4 +391,24 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
 export function announceFile(roomId: string, metadata: Record<string, unknown>, uploadId: string | null) {
   if (uploadId) removeUpload(roomId, uploadId, 'cancelled', false);
   broadcast(roomId, { type: 'file', metadata, uploadId });
+}
+
+/**
+ * Info: (20261106 - Luphia)
+ * 檔案被移除 (或移入待刪除區) 時通知在線成員
+ */
+export function announceFileRemoved(roomId: string, filename: string) {
+  broadcast(roomId, { type: 'file-removed', filename });
+}
+
+/**
+ * Info: (20261106 - Luphia)
+ * 房間設定變更 (名稱、公開、上傳權限、密碼、到期) 時通知在線成員
+ */
+export function announceRoomSettings(roomId: string, settings: Record<string, unknown>) {
+  broadcast(roomId, { type: 'room-settings', settings });
+}
+
+export function uploadingCount(roomId: string): number {
+  return [...(state.uploads.get(roomId)?.values() ?? [])].filter(u => u.status === 'uploading').length;
 }

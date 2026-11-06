@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { IChatMember, IChatMessage, IUploadStatus, TChatEvent } from '@/lib/chat_hub';
 import { ApiCode } from '@/lib/status';
+import { memberHeaders } from '@/lib/member';
 
 /**
  * Info: (20261105 - Luphia)
@@ -46,12 +47,15 @@ interface IUseRoomChatOptions {
   enabled: boolean;
   // Info: (20261105 - Luphia) 房間新增或更新檔案時呼叫 (uploadId 不為 null 表示是新上傳完成)
   onFile?: (metadata: Record<string, unknown>, uploadId: string | null) => void;
+  // Info: (20261106 - Luphia) 檔案被刪除、房間設定變更
+  onFileRemoved?: (filename: string) => void;
+  onRoomSettings?: (settings: Record<string, unknown>) => void;
 }
 
 // Info: (20261105 - Luphia) 畫面上最多保留的訊息數 (僅限本機記憶體)
 const MAX_ENTRIES = 300;
 
-export function useRoomChat({ roomId, password, enabled, onFile }: IUseRoomChatOptions): IRoomChat {
+export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, onRoomSettings }: IUseRoomChatOptions): IRoomChat {
   const [status, setStatus] = useState<TChatStatus>('idle');
   const [me, setMe] = useState<IChatMember | null>(null);
   const [online, setOnline] = useState(0);
@@ -60,9 +64,13 @@ export function useRoomChat({ roomId, password, enabled, onFile }: IUseRoomChatO
   const [uploads, setUploads] = useState<Record<string, IUploadStatus>>({});
 
   const onFileRef = useRef(onFile);
+  const onFileRemovedRef = useRef(onFileRemoved);
+  const onRoomSettingsRef = useRef(onRoomSettings);
   useEffect(() => {
     onFileRef.current = onFile;
-  }, [onFile]);
+    onFileRemovedRef.current = onFileRemoved;
+    onRoomSettingsRef.current = onRoomSettings;
+  }, [onFile, onFileRemoved, onRoomSettings]);
 
   const tokenRef = useRef<string | null>(null);
   const passwordRef = useRef(password);
@@ -134,6 +142,10 @@ export function useRoomChat({ roomId, password, enabled, onFile }: IUseRoomChatO
           if (typeof event.metadata.filename === 'string') system(`${event.metadata.filename} is ready`);
         }
         onFileRef.current?.(event.metadata, event.uploadId);
+      } else if (event.type === 'file-removed') {
+        onFileRemovedRef.current?.(event.filename);
+      } else if (event.type === 'room-settings') {
+        onRoomSettingsRef.current?.(event.settings);
       } else if (event.type === 'message') {
         push({ kind: 'message', id: event.message.id, message: event.message });
       } else if (event.type === 'presence') {
@@ -160,9 +172,10 @@ export function useRoomChat({ roomId, password, enabled, onFile }: IUseRoomChatO
     async function connect() {
       if (cancelled) return;
       try {
-        const headers: Record<string, string> = {};
-        if (passwordRef.current) headers['x-room-password'] = passwordRef.current;
-        const res = await fetch(`/api/v1/room/${roomId}/chat/join`, { method: 'POST', headers });
+        const res = await fetch(`/api/v1/room/${roomId}/chat/join`, {
+          method: 'POST',
+          headers: memberHeaders({}, passwordRef.current),
+        });
         const data = await res.json();
         if (cancelled) return;
 

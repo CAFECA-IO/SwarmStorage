@@ -1,8 +1,9 @@
 import { NextRequest } from 'next/server';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
-import { isValidRoomId } from '@/lib/room_access';
-import { reportUpload, type IUploadReport } from '@/lib/chat_hub';
+import path from 'path';
+import { ROOM_BASE_DIR, canUpload, isValidRoomId, readRoomConfig } from '@/lib/room_access';
+import { reportUpload, resolveChatToken, type IUploadReport } from '@/lib/chat_hub';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,13 @@ export async function POST(
       report = (await request.json()) as IUploadReport;
     } catch {
       return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid JSON body');
+    }
+
+    // Info: (20261106 - Luphia) 依房間上傳權限檢查 (只有房主可上傳的房間)
+    const entry = resolveChatToken(roomId, token);
+    if (entry && report?.status === 'uploading') {
+      const config = await readRoomConfig(path.join(ROOM_BASE_DIR, roomId));
+      if (!canUpload(config, entry.memberHash)) return jsonFail(ApiCode.FORBIDDEN, 'Only the room owner can upload');
     }
 
     const result = reportUpload(roomId, token, report || {});

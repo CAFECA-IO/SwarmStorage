@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
-import { checkRoomAccess } from '@/lib/room_access';
+import { checkRoomAccess, memberHashFromRequest } from '@/lib/room_access';
 import { issueChatToken, onlineCount } from '@/lib/chat_hub';
 
 export const dynamic = 'force-dynamic';
@@ -17,10 +17,11 @@ export async function POST(
 ) {
   try {
     const { room_id: roomId } = await params;
-    const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'));
+    const memberHash = memberHashFromRequest(request.headers);
+    const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'), memberHash);
     if (!access.ok) return jsonFail(access.code, access.message);
 
-    const { token, member, expiresAt } = issueChatToken(roomId, access.expiresAt);
+    const { token, member, expiresAt } = issueChatToken(roomId, access.expiresAt, memberHash);
     return jsonOk({ token, ...member, expiresAt, online: onlineCount(roomId) }, 'OK', {
       headers: { 'Cache-Control': 'no-store' },
     });

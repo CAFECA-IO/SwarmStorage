@@ -4,7 +4,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
-import { isValidRoomId } from '@/lib/room_access';
+import { isRoomOwner, isValidRoomId, memberHashFromRequest, readRoomConfig } from '@/lib/room_access';
 import { keccak256, toUtf8Bytes } from 'ethers';
 
 const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
@@ -19,6 +19,11 @@ export async function POST(
       return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid room number");
     }
     const roomPath = path.join(ROOM_BASE_DIR, roomId);
+    // Info: (20261106 - Luphia) 有房主的房間只有房主可變更
+    const ownerCheckConfig = await readRoomConfig(roomPath);
+    if (ownerCheckConfig.ownerHash && !isRoomOwner(ownerCheckConfig, memberHashFromRequest(request.headers))) {
+      return jsonFail(ApiCode.FORBIDDEN, "Only the room owner can change this");
+    }
 
     // Info: (20260113 - Luphia) Validate room exists
     try {
@@ -104,6 +109,11 @@ export async function DELETE(
       return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid room number");
     }
     const roomPath = path.join(ROOM_BASE_DIR, roomId);
+    // Info: (20261106 - Luphia) 有房主的房間只有房主可變更
+    const ownerCheckConfig = await readRoomConfig(roomPath);
+    if (ownerCheckConfig.ownerHash && !isRoomOwner(ownerCheckConfig, memberHashFromRequest(request.headers))) {
+      return jsonFail(ApiCode.FORBIDDEN, "Only the room owner can change this");
+    }
     const configPath = path.join(roomPath, '_config.json');
 
     try {
