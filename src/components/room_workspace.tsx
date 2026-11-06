@@ -22,6 +22,7 @@ import { ClockIcon, LockIcon, XIcon } from '@/components/icons';
 import FilePreviewPane, { type IFileLoadState, type TViewMode } from '@/components/file_preview_pane';
 import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
+import RoomActivity from '@/components/room_activity';
 import { useRoomChat } from '@/lib/use_room_chat';
 import type { IHtmlViewerHandle } from '@/components/html_viewer';
 
@@ -118,7 +119,77 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const blobPromises = useRef(new Map<string, Promise<Blob>>());
   const objectUrls = useRef<string[]>([]);
 
-  const chat = useRoomChat({ roomId, password: chatPassword, enabled: chatEnabled });
+  // Info: (20261105 - Luphia) 即時上傳：進房後新增的檔案、想被通知的上傳、完成提示
+  const [newFiles, setNewFiles] = useState<Record<string, number>>({});
+  const [watching, setWatching] = useState<Set<string>>(() => new Set());
+  const [toasts, setToasts] = useState<{ id: string; filename: string }[]>([]);
+  const watchingRef = useRef(watching);
+  useEffect(() => {
+    watchingRef.current = watching;
+  }, [watching]);
+
+  const dismissToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
+
+  /**
+   * Info: (20261105 - Luphia)
+   * 房間新增 / 更新檔案 (由伺服器即時推送)：更新清單；新上傳會清除同名檔案的快取
+   */
+  const handleFileEvent = (raw: Record<string, unknown>, uploadId: string | null) => {
+    const metadata = raw as unknown as ILariaMetadata;
+    if (typeof metadata.filename !== 'string' || !Array.isArray(metadata.shards)) return;
+    const name = metadata.filename;
+
+    if (uploadId) {
+      blobPromises.current.delete(name);
+      setLoads(prev => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      setShardStats(prev => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      setNewFiles(prev => ({ ...prev, [name]: Date.now() }));
+    }
+
+    const list = [...filesRef.current.filter(f => f.filename !== name), metadata].sort((a, b) => a.filename.localeCompare(b.filename));
+    filesRef.current = list;
+    setFiles(list);
+
+    // Info: (20261105 - Luphia) 正在檢視的檔案被重新上傳：載入新版本
+    if (uploadId && activeNameRef.current === name) loadBlob(name).catch(() => undefined);
+
+    if (uploadId && watchingRef.current.has(uploadId)) {
+      setWatching(prev => {
+        const next = new Set(prev);
+        next.delete(uploadId);
+        return next;
+      });
+      const toastId = `${uploadId}-${Date.now()}`;
+      setToasts(prev => [...prev, { id: toastId, filename: name }]);
+      setTimeout(() => setToasts(prev => prev.filter(t => t.id !== toastId)), 10000);
+      if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+        new Notification(`${name} is ready`, { body: `Room #${roomId}` });
+      }
+    }
+  };
+
+  const chat = useRoomChat({ roomId, password: chatPassword, enabled: chatEnabled, onFile: handleFileEvent });
+
+  const toggleWatch = (uploadId: string) => {
+    const adding = !watching.has(uploadId);
+    setWatching(prev => {
+      const next = new Set(prev);
+      if (adding) next.add(uploadId);
+      else next.delete(uploadId);
+      return next;
+    });
+    if (adding && typeof Notification !== 'undefined' && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => undefined);
+    }
+  };
   const othersMessageCount = chat.entries.filter(e => e.kind === 'message' && e.message.memberId !== chat.me?.memberId).length;
   const othersCountRef = useRef(0);
   const activeNameRef = useRef<string | null>(null);
@@ -208,12 +279,16 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     }
   }, [roomId]);
 
-  // Info: (20261105 - Luphia) 每 30 秒更新倒數
+  // Info: (20261105 - Luphia) 每 10 秒更新時間 (到期倒數、「幾秒前」)
   useEffect(() => {
-    if (!expiry?.expiresAt) return;
-    const timer = setInterval(() => setNow(Date.now()), 30000);
-    return () => clearInterval(timer);
-  }, [expiry]);
+    const tick = () => setNow(Date.now());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 10000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, []);
 
   const fetchFiles = useCallback(
     async (passwordValue?: string) => {
@@ -400,6 +475,24 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     return result;
   }, [files]);
 
+  // Info: (20261105 - Luphia) 尚未完成的上傳也列在檔案清單中 (不可點選)
+  const pendingUploads = chat.uploads.filter(u => !(files || []).some(f => f.filename === u.filename));
+  const uploadGroups = useMemo(() => {
+    const result: Record<TFileGroup, typeof pendingUploads> = { documents: [], media: [], other: [] };
+    pendingUploads.forEach(u => result[getFileGroup(getFileKind(u.filename, u.mimeType))].push(u));
+    return result;
+  }, [pendingUploads]);
+  const thumbnails = useMemo(() => {
+    const result: Record<string, string> = {};
+    (files || []).forEach(f => {
+      const url = loads[f.filename]?.url;
+      if (url && getFileKind(f.filename, f.mimeType) === 'image') result[f.filename] = url;
+    });
+    return result;
+  }, [files, loads]);
+  const expiryText =
+    expiry && now > 0 ? (expiry.expiresAt ? formatRemaining(expiry.expiresAt - (now + expiry.clockOffset)) : null) : null;
+
   const activeFile = files?.find(f => f.filename === activeName) || null;
   const activeKind = activeFile ? getFileKind(activeFile.filename, activeFile.mimeType) : null;
   const activeOutline = activeName ? outlines[activeName] || [] : [];
@@ -459,7 +552,28 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         </p>
       )}
 
-      {GROUP_ORDER.filter(group => groups[group].length > 0).map(group => (
+      <button
+        type="button"
+        onClick={() => {
+          setActiveName(null);
+          setActiveHeading('');
+          setNavOpen(false);
+        }}
+        aria-current={!activeName ? 'page' : undefined}
+        className={`flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${!activeName ? 'bg-slate-800 font-semibold text-white' : 'text-slate-300 hover:bg-white/5'}`}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M3 12h4l3 8 4-16 3 8h4" />
+        </svg>
+        <span className="flex-1">Room activity</span>
+        {chat.uploads.length > 0 && (
+          <span className="rounded-full bg-blue-600 px-[7px] text-[10px] font-bold leading-[18px] text-white" aria-label={`${chat.uploads.length} uploads in progress`}>
+            {chat.uploads.length}
+          </span>
+        )}
+      </button>
+
+      {GROUP_ORDER.filter(group => groups[group].length > 0 || uploadGroups[group].length > 0).map(group => (
         <div key={group} className="flex flex-col gap-0.5">
           <p className="mx-1.5 mb-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">{FILE_GROUP_LABELS[group]}</p>
           {groups[group].map(f => {
@@ -479,10 +593,23 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               </button>
             );
           })}
+          {uploadGroups[group].map(u => (
+            <span
+              key={u.uploadId}
+              className="flex min-h-9 items-center gap-2.5 px-2.5 text-[13px] italic text-slate-400"
+              title={u.status === 'interrupted' ? 'Upload interrupted' : 'Uploading'}
+            >
+              <span className="h-2 w-2 shrink-0 rounded-sm border border-dashed border-slate-400" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{u.filename}</span>
+              <span className={`shrink-0 font-mono text-[10px] not-italic ${u.status === 'interrupted' ? 'text-amber-300' : 'text-blue-300'}`}>
+                {u.status === 'interrupted' ? 'paused' : `${u.shardsTotal ? Math.floor((u.shardsDone / u.shardsTotal) * 100) : 0}%`}
+              </span>
+            </span>
+          ))}
         </div>
       ))}
 
-      {files && files.length === 0 && <p className="px-1.5 text-sm text-slate-400">No files in this room yet.</p>}
+      {files && files.length === 0 && pendingUploads.length === 0 && <p className="px-1.5 text-sm text-slate-400">No files in this room yet.</p>}
 
       {activeKind === 'html' && activeOutline.length > 0 && viewMode !== 'source' && (
         <div className="flex flex-col gap-0.5 border-t border-white/10 pt-4">
@@ -535,14 +662,19 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     }
     if (!activeFile) {
       return (
-        <div className="flex flex-1 items-center justify-center p-6 text-center">
-          <div>
-            <p className="text-base font-semibold text-slate-200">Select a file to open it</p>
-            <p className="mt-1 text-sm text-slate-400">
-              {files ? `${files.length} file${files.length === 1 ? '' : 's'} in room #${roomId}` : ''}
-            </p>
-          </div>
-        </div>
+        <RoomActivity
+          files={files || []}
+          uploads={chat.uploads}
+          online={chat.online}
+          myMemberId={chat.me?.memberId ?? null}
+          expiryText={expiryText}
+          newFiles={newFiles}
+          thumbnails={thumbnails}
+          watching={watching}
+          now={now}
+          onToggleWatch={toggleWatch}
+          onOpenFile={openFile}
+        />
       );
     }
 
@@ -813,6 +945,41 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           </div>
         )}
       </aside>
+
+      {toasts.length > 0 && (
+        <div className="fixed bottom-4 left-4 z-50 flex w-[min(340px,calc(100vw-2rem))] flex-col gap-2" role="status" aria-live="polite">
+          {toasts.map(toast => (
+            <div
+              key={toast.id}
+              className="flex items-center gap-3 rounded-[14px] border border-emerald-800 bg-emerald-950 px-3.5 py-3 shadow-2xl shadow-black/50"
+            >
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#34D399" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="m8 12 3 3 5-6" />
+              </svg>
+              <span className="min-w-0 flex-1 truncate text-[13px] text-emerald-50">{toast.filename} is ready</span>
+              <button
+                type="button"
+                onClick={() => {
+                  openFile(toast.filename);
+                  dismissToast(toast.id);
+                }}
+                className="h-8 shrink-0 rounded-lg bg-emerald-600 px-3 text-xs font-semibold text-white hover:bg-emerald-500"
+              >
+                Open
+              </button>
+              <button
+                type="button"
+                aria-label="Dismiss"
+                onClick={() => dismissToast(toast.id)}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-emerald-200 hover:bg-white/10"
+              >
+                <XIcon className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {needsPassword && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">

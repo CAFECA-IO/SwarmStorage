@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { IChatMember, IChatMessage, TChatEvent } from '@/lib/chat_hub';
+import type { IChatMember, IChatMessage, IUploadStatus, TChatEvent } from '@/lib/chat_hub';
 import { ApiCode } from '@/lib/status';
 
 /**
@@ -8,6 +8,7 @@ import { ApiCode } from '@/lib/status';
  * - join 取得 token → EventSource 接收事件 → POST 發送訊息
  * - 訊息只存在這個分頁的記憶體，重新整理或離開即消失
  * - 斷線時自動重連 (伺服器重啟後會重新加入並取得新暱稱)
+ * Info: (20261105 - Luphia) 同一條連線也承載房間的即時上傳狀態與檔案新增事件
  */
 
 export type TChatStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'unauthorized' | 'expired';
@@ -23,23 +24,45 @@ export interface IRoomChat {
   entries: TChatEntry[];
   sendError: string;
   send: (text: string) => Promise<boolean>;
+  // Info: (20261105 - Luphia) 房間中進行中的上傳 (含自己的)
+  uploads: IUploadStatus[];
+  reportUpload: (report: IUploadReportInput) => Promise<boolean>;
+  getToken: () => string | null;
+}
+
+export interface IUploadReportInput {
+  uploadId: string;
+  filename: string;
+  size: number;
+  mimeType: string;
+  shardsDone: number;
+  shardsTotal: number;
+  status: 'uploading' | 'failed' | 'cancelled';
 }
 
 interface IUseRoomChatOptions {
   roomId: string | null;
   password?: string | null;
   enabled: boolean;
+  // Info: (20261105 - Luphia) 房間新增或更新檔案時呼叫 (uploadId 不為 null 表示是新上傳完成)
+  onFile?: (metadata: Record<string, unknown>, uploadId: string | null) => void;
 }
 
 // Info: (20261105 - Luphia) 畫面上最多保留的訊息數 (僅限本機記憶體)
 const MAX_ENTRIES = 300;
 
-export function useRoomChat({ roomId, password, enabled }: IUseRoomChatOptions): IRoomChat {
+export function useRoomChat({ roomId, password, enabled, onFile }: IUseRoomChatOptions): IRoomChat {
   const [status, setStatus] = useState<TChatStatus>('idle');
   const [me, setMe] = useState<IChatMember | null>(null);
   const [online, setOnline] = useState(0);
   const [entries, setEntries] = useState<TChatEntry[]>([]);
   const [sendError, setSendError] = useState('');
+  const [uploads, setUploads] = useState<Record<string, IUploadStatus>>({});
+
+  const onFileRef = useRef(onFile);
+  useEffect(() => {
+    onFileRef.current = onFile;
+  }, [onFile]);
 
   const tokenRef = useRef<string | null>(null);
   const passwordRef = useRef(password);
@@ -56,6 +79,7 @@ export function useRoomChat({ roomId, password, enabled }: IUseRoomChatOptions):
     let attempts = 0;
     let joinedOnce = false;
     let myId = '';
+    const knownUploads = new Map<string, IUploadStatus>();
 
     const push = (entry: TChatEntry) => setEntries(prev => [...prev, entry].slice(-MAX_ENTRIES));
     const system = (text: string) => push({ kind: 'system', id: `sys-${Date.now()}-${Math.random()}`, text, at: Date.now() });
@@ -78,6 +102,38 @@ export function useRoomChat({ roomId, password, enabled }: IUseRoomChatOptions):
           joinedOnce = true;
           system(`You joined as ${event.me.nickname}`);
         }
+        knownUploads.clear();
+        event.uploads.forEach(u => knownUploads.set(u.uploadId, u));
+        setUploads(Object.fromEntries(event.uploads.map(u => [u.uploadId, u])));
+      } else if (event.type === 'upload') {
+        const { upload } = event;
+        const previous = knownUploads.get(upload.uploadId);
+        const who = upload.uploader.memberId === myId ? 'You' : upload.uploader.nickname;
+        if (!previous) system(`${who} started uploading ${upload.filename}`);
+        else if (previous.status === 'uploading' && upload.status === 'interrupted') system(`Upload of ${upload.filename} was interrupted`);
+        knownUploads.set(upload.uploadId, upload);
+        setUploads(prev => ({ ...prev, [upload.uploadId]: upload }));
+      } else if (event.type === 'upload-removed') {
+        const previous = knownUploads.get(event.uploadId);
+        knownUploads.delete(event.uploadId);
+        if (previous) system(`Upload of ${previous.filename} ${event.reason === 'failed' ? 'failed' : 'stopped'}`);
+        setUploads(prev => {
+          const next = { ...prev };
+          delete next[event.uploadId];
+          return next;
+        });
+      } else if (event.type === 'file') {
+        if (event.uploadId) {
+          knownUploads.delete(event.uploadId);
+          const id = event.uploadId;
+          setUploads(prev => {
+            const next = { ...prev };
+            delete next[id];
+            return next;
+          });
+          if (typeof event.metadata.filename === 'string') system(`${event.metadata.filename} is ready`);
+        }
+        onFileRef.current?.(event.metadata, event.uploadId);
       } else if (event.type === 'message') {
         push({ kind: 'message', id: event.message.id, message: event.message });
       } else if (event.type === 'presence') {
@@ -176,8 +232,32 @@ export function useRoomChat({ roomId, password, enabled }: IUseRoomChatOptions):
     [roomId]
   );
 
+  const reportUpload = useCallback(
+    async (report: IUploadReportInput): Promise<boolean> => {
+      const token = tokenRef.current;
+      if (!token || !roomId) return false;
+      try {
+        const res = await fetch(`/api/v1/room/${roomId}/uploads`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(report),
+          keepalive: report.status !== 'uploading',
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    },
+    [roomId]
+  );
+
+  const getToken = useCallback(() => tokenRef.current, []);
+
   return {
     status: enabled && roomId && status === 'idle' ? 'connecting' : status,
+    uploads: Object.values(uploads).sort((a, b) => a.startedAt - b.startedAt),
+    reportUpload,
+    getToken,
     me,
     online,
     entries,

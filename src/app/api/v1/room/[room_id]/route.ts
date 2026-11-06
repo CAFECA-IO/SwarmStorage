@@ -4,6 +4,7 @@ import path from 'path';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
 import { checkRoomAccess, isValidRoomId } from '@/lib/room_access';
+import { announceFile } from '@/lib/chat_hub';
 
 const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
 
@@ -27,8 +28,18 @@ export async function POST(
 
     // Info: (20260113 - Luphia) Parse Metadata
     const metadata = await request.json();
-    if (!metadata || !metadata.filename) {
+    if (!metadata || typeof metadata.filename !== 'string' || !metadata.filename) {
       return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid metadata");
+    }
+    // Info: (20261105 - Luphia) 檔名只能是單一檔名，避免路徑穿越或覆寫房間設定檔
+    const reservedNames = ['_config', 'metadata', 'password.hash', 'expiration'];
+    if (
+      /[\\/\0]/.test(metadata.filename) ||
+      metadata.filename.startsWith('.') ||
+      metadata.filename.length > 255 ||
+      reservedNames.includes(metadata.filename)
+    ) {
+      return jsonFail(ApiCode.VALIDATION_ERROR, "Invalid filename");
     }
 
     const filename = `${metadata.filename}.json`;
@@ -36,6 +47,10 @@ export async function POST(
 
     // Info: (20260113 - Luphia) Save to file
     await fs.writeFile(filePath, JSON.stringify(metadata, null, 2));
+
+    // Info: (20261105 - Luphia) 即時通知房間內的人：新增或更新的檔案 (x-upload-id 對應進行中的上傳)
+    const uploadId = request.headers.get('x-upload-id');
+    announceFile(roomId, metadata, uploadId && /^[A-Za-z0-9_-]{6,64}$/.test(uploadId) ? uploadId : null);
 
     return jsonOk({ filename }, "Metadata saved to room");
 

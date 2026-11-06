@@ -40,6 +40,10 @@ const PARTICLES = [
   { left: '55%', delay: '0.15s', duration: '1.2s', char: '1' },
 ];
 
+// Info: (20261105 - Luphia) crypto.randomUUID 僅限 HTTPS / localhost；getRandomValues 在一般 HTTP 也可用
+const createUploadId = () =>
+  Array.from(crypto.getRandomValues(new Uint8Array(12)), b => b.toString(16).padStart(2, '0')).join('');
+
 interface IUploadTabProps {
   roomNumber: string | null;
 }
@@ -57,9 +61,32 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
   const othersMessageCount = chat.entries.filter(e => e.kind === 'message' && e.message.memberId !== chat.me?.memberId).length;
   const unreadMessages = chatOpen ? 0 : Math.max(0, othersMessageCount - seenMessages);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Info: (20261105 - Luphia) 上傳進度回報節流：每個檔案最多每秒一次
+  const lastReportRef = useRef(new Map<string, number>());
 
   const uploadFile = (fileItem: IFileUploadState) => {
+    const report = (status: 'uploading' | 'failed', shardsDone: number, shardsTotal: number) =>
+      chat.reportUpload({
+        uploadId: fileItem.id,
+        filename: fileItem.file.name,
+        size: fileItem.file.size,
+        mimeType: fileItem.file.type,
+        shardsDone,
+        shardsTotal,
+        status,
+      });
+    let shardsTotalKnown = 0;
+
     uploadFileLib(fileItem.file, {
+      onShardProgress: (done: number, total: number) => {
+        shardsTotalKnown = total;
+        const now = Date.now();
+        const last = lastReportRef.current.get(fileItem.id) ?? 0;
+        if (done === 0 || done === total || now - last >= 1000) {
+          lastReportRef.current.set(fileItem.id, now);
+          report('uploading', done, total);
+        }
+      },
       onProgress: (progress: number) => {
         setFiles(prev => prev.map(f =>
           f.id === fileItem.id ? { ...f, progress } : f
@@ -82,10 +109,13 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
             await fetch(`/api/v1/room/${roomNumber}`, {
               method: 'POST',
               headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                // Info: (20261105 - Luphia) 讓伺服器把這筆 metadata 對應到房間中的上傳進度
+                'x-upload-id': fileItem.id
               },
               body: JSON.stringify(metadata)
             });
+            lastReportRef.current.delete(fileItem.id);
             console.log(`[Room] Uploaded metadata for ${fileItem.file.name} to room ${roomNumber}`);
           } catch (err) {
             console.error('[Room] Failed to upload metadata:', err);
@@ -96,13 +126,15 @@ export default function UploadTab({ roomNumber }: IUploadTabProps) {
         setFiles(prev => prev.map(f =>
           f.id === fileItem.id ? { ...f, status: 'error', error } : f
         ));
+        lastReportRef.current.delete(fileItem.id);
+        report('failed', 0, shardsTotalKnown);
       }
     }, { allowDownload: fileItem.allowDownload });
   };
 
   const handleFiles = (newFiles: File[]) => {
     const newUploads: IFileUploadState[] = newFiles.map(file => ({
-      id: Math.random().toString(36).substring(7),
+      id: createUploadId(),
       file,
       progress: 0,
       status: 'uploading',

@@ -4,6 +4,8 @@ export interface IUploadCallbacks {
   onProgress?: (percentage: number) => void;
   onSuccess?: (hash: string, metadata?: ILariaMetadata) => void;
   onError?: (error: string) => void;
+  // Info: (20261105 - Luphia) 每存入一個分片回報一次 (done / total)，供房間即時顯示上傳進度
+  onShardProgress?: (done: number, total: number) => void;
 }
 
 export interface IUploadOptions {
@@ -167,6 +169,7 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
     let uploaded = 0;
 
     const shardCids: string[] = [];
+    if (callbacks.onShardProgress) callbacks.onShardProgress(0, totalUploads);
 
     for (let stripeIndex = 0; stripeIndex < totalStripes; stripeIndex++) {
       const start = stripeIndex * DATA_STRIPE_SIZE;
@@ -191,6 +194,7 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
           const cid = await uploadSingleFile(shardBlob, `${file.name}.part${stripeIndex * TOTAL_SHARDS + i}`);
           uploaded++;
           if (callbacks.onProgress) callbacks.onProgress(Math.min((uploaded / totalUploads) * 100, 99));
+          if (callbacks.onShardProgress) callbacks.onShardProgress(uploaded, totalUploads);
           return cid;
         })
       );

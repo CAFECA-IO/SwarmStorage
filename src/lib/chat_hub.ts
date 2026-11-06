@@ -29,8 +29,25 @@ export interface IChatMessage extends IChatMember {
   sentAt: number;
 }
 
+// Info: (20261105 - Luphia) 上傳中的檔案 (僅存在記憶體，供房間內其他人即時看到進度)
+export interface IUploadStatus {
+  uploadId: string;
+  filename: string;
+  size: number;
+  mimeType: string;
+  uploader: IChatMember;
+  shardsDone: number;
+  shardsTotal: number;
+  startedAt: number;
+  updatedAt: number;
+  status: 'uploading' | 'interrupted';
+}
+
 export type TChatEvent =
-  | { type: 'ready'; me: IChatMember; online: number; members: IChatMember[] }
+  | { type: 'ready'; me: IChatMember; online: number; members: IChatMember[]; uploads: IUploadStatus[] }
+  | { type: 'upload'; upload: IUploadStatus }
+  | { type: 'upload-removed'; uploadId: string; reason: 'failed' | 'cancelled' | 'interrupted' }
+  | { type: 'file'; metadata: Record<string, unknown>; uploadId: string | null }
   | { type: 'message'; message: IChatMessage }
   | { type: 'presence'; action: 'join' | 'leave'; member: IChatMember; online: number }
   | { type: 'expired' }
@@ -52,12 +69,22 @@ interface IChatConnection {
 interface IChatHubState {
   tokens: Map<string, IChatToken>;
   rooms: Map<string, Map<string, IChatConnection>>;
+  uploads: Map<string, Map<string, IUploadStatus>>;
+  sweeper?: ReturnType<typeof setInterval>;
 }
 
 // Info: (20261105 - Luphia) 掛在 globalThis，避免開發模式熱更新時產生多份狀態
 const globalForChat = globalThis as unknown as { drophereChatHub?: IChatHubState };
-const state: IChatHubState = globalForChat.drophereChatHub ?? { tokens: new Map(), rooms: new Map() };
+const state: IChatHubState = globalForChat.drophereChatHub ?? { tokens: new Map(), rooms: new Map(), uploads: new Map() };
+if (!state.uploads) state.uploads = new Map();
 globalForChat.drophereChatHub = state;
+
+// Info: (20261105 - Luphia) 上傳進度：超過 60 秒沒有更新視為中斷，中斷 30 秒後移除
+const UPLOAD_STALE_MS = 60 * 1000;
+const UPLOAD_INTERRUPTED_TTL_MS = 30 * 1000;
+const UPLOAD_SWEEP_MS = 10 * 1000;
+const MAX_UPLOADS_PER_ROOM = 50;
+const MAX_FILENAME_LENGTH = 255;
 
 const pick = <T,>(list: T[]): T => list[Math.floor(Math.random() * list.length)];
 
@@ -156,7 +183,7 @@ export function subscribe(
 
   const me: IChatMember = { memberId: entry.memberId, nickname: entry.nickname };
   const members = membersOf(roomId);
-  send({ type: 'ready', me, online: members.length, members });
+  send({ type: 'ready', me, online: members.length, members, uploads: uploadsOf(roomId) });
   if (!wasOnline) broadcast(roomId, { type: 'presence', action: 'join', member: me, online: members.length });
 
   return {
@@ -166,6 +193,8 @@ export function subscribe(
       if (current.size === 0) state.rooms.delete(roomId);
       if (!isMemberOnline(roomId, entry.memberId)) {
         broadcast(roomId, { type: 'presence', action: 'leave', member: me, online: membersOf(roomId).length });
+        // Info: (20261105 - Luphia) 上傳者離開：其未完成的上傳標示為中斷
+        markMemberUploadsInterrupted(roomId, entry.memberId);
       }
     },
   };
@@ -209,6 +238,7 @@ export function closeRoom(roomId: string) {
     }
   });
   state.rooms.delete(roomId);
+  state.uploads.delete(roomId);
   state.tokens.forEach((token, key) => {
     if (token.roomId === roomId) state.tokens.delete(key);
   });
@@ -216,4 +246,141 @@ export function closeRoom(roomId: string) {
 
 export function onlineCount(roomId: string): number {
   return membersOf(roomId).length;
+}
+
+// --- Info: (20261105 - Luphia) 即時上傳狀態 ---
+
+const uploadsOf = (roomId: string): IUploadStatus[] =>
+  [...(state.uploads.get(roomId)?.values() ?? [])].sort((a, b) => a.startedAt - b.startedAt);
+
+function markMemberUploadsInterrupted(roomId: string, memberId: string) {
+  state.uploads.get(roomId)?.forEach(upload => {
+    if (upload.uploader.memberId === memberId && upload.status === 'uploading') {
+      upload.status = 'interrupted';
+      upload.updatedAt = Date.now();
+      broadcast(roomId, { type: 'upload', upload });
+    }
+  });
+}
+
+function removeUpload(roomId: string, uploadId: string, reason: 'failed' | 'cancelled' | 'interrupted', notify = true) {
+  const room = state.uploads.get(roomId);
+  if (!room?.delete(uploadId)) return;
+  if (room.size === 0) state.uploads.delete(roomId);
+  if (notify) broadcast(roomId, { type: 'upload-removed', uploadId, reason });
+}
+
+const sweepUploads = () => {
+  const now = Date.now();
+  state.uploads.forEach((room, roomId) => {
+    room.forEach(upload => {
+      if (upload.status === 'uploading' && now - upload.updatedAt > UPLOAD_STALE_MS) {
+        upload.status = 'interrupted';
+        upload.updatedAt = now;
+        broadcast(roomId, { type: 'upload', upload });
+      } else if (upload.status === 'interrupted' && now - upload.updatedAt > UPLOAD_INTERRUPTED_TTL_MS) {
+        removeUpload(roomId, upload.uploadId, 'interrupted');
+      }
+    });
+  });
+};
+
+if (!state.sweeper) {
+  state.sweeper = setInterval(sweepUploads, UPLOAD_SWEEP_MS);
+  // Info: (20261105 - Luphia) 不阻止 Node 程序結束
+  state.sweeper.unref?.();
+}
+
+export interface IUploadReport {
+  uploadId?: unknown;
+  filename?: unknown;
+  size?: unknown;
+  mimeType?: unknown;
+  shardsDone?: unknown;
+  shardsTotal?: unknown;
+  status?: unknown;
+}
+
+export type TUploadReportResult = { ok: true } | { ok: false; reason: 'token' | 'invalid' | 'limit' | 'forbidden' };
+
+/**
+ * Info: (20261105 - Luphia)
+ * 上傳者回報進度：開始 / 進行中 (uploading)、失敗 (failed)、取消 (cancelled)
+ * 只有發起上傳的成員可以更新同一個 uploadId
+ */
+export function reportUpload(roomId: string, token: string | null, report: IUploadReport): TUploadReportResult {
+  const entry = resolveChatToken(roomId, token);
+  if (!entry) return { ok: false, reason: 'token' };
+
+  const uploadId = typeof report.uploadId === 'string' && /^[A-Za-z0-9_-]{6,64}$/.test(report.uploadId) ? report.uploadId : null;
+  if (!uploadId) return { ok: false, reason: 'invalid' };
+
+  let room = state.uploads.get(roomId);
+  const existing = room?.get(uploadId);
+  if (existing && existing.uploader.memberId !== entry.memberId) return { ok: false, reason: 'forbidden' };
+
+  if (report.status === 'failed' || report.status === 'cancelled') {
+    if (existing) removeUpload(roomId, uploadId, report.status);
+    return { ok: true };
+  }
+  if (report.status !== 'uploading') return { ok: false, reason: 'invalid' };
+
+  const filename = typeof report.filename === 'string' ? report.filename.trim() : '';
+  const size = Number(report.size);
+  const shardsTotal = Number(report.shardsTotal);
+  const shardsDone = Number(report.shardsDone);
+  if (
+    !filename ||
+    filename.length > MAX_FILENAME_LENGTH ||
+    !Number.isFinite(size) ||
+    size < 0 ||
+    !Number.isInteger(shardsTotal) ||
+    shardsTotal < 0 ||
+    !Number.isInteger(shardsDone) ||
+    shardsDone < 0 ||
+    shardsDone > shardsTotal
+  ) {
+    return { ok: false, reason: 'invalid' };
+  }
+
+  const now = Date.now();
+  if (existing) {
+    // Info: (20261105 - Luphia) 進度只增不減
+    existing.shardsDone = Math.max(existing.shardsDone, shardsDone);
+    existing.updatedAt = now;
+    existing.status = 'uploading';
+    broadcast(roomId, { type: 'upload', upload: existing });
+    return { ok: true };
+  }
+
+  if (!room) {
+    room = new Map();
+    state.uploads.set(roomId, room);
+  }
+  if (room.size >= MAX_UPLOADS_PER_ROOM) return { ok: false, reason: 'limit' };
+
+  const upload: IUploadStatus = {
+    uploadId,
+    filename,
+    size,
+    mimeType: typeof report.mimeType === 'string' ? report.mimeType.slice(0, 127) : '',
+    uploader: { memberId: entry.memberId, nickname: entry.nickname },
+    shardsDone,
+    shardsTotal,
+    startedAt: now,
+    updatedAt: now,
+    status: 'uploading',
+  };
+  room.set(uploadId, upload);
+  broadcast(roomId, { type: 'upload', upload });
+  return { ok: true };
+}
+
+/**
+ * Info: (20261105 - Luphia)
+ * 房間新增或更新檔案 metadata 時通知在線成員；若對應某個上傳則一併結束該上傳
+ */
+export function announceFile(roomId: string, metadata: Record<string, unknown>, uploadId: string | null) {
+  if (uploadId) removeUpload(roomId, uploadId, 'cancelled', false);
+  broadcast(roomId, { type: 'file', metadata, uploadId });
 }
