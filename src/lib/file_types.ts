@@ -3,7 +3,7 @@
  * 檔案類型判斷：決定瀏覽器內的預覽方式與檔案分組
  */
 
-export type TFileKind = 'html' | 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'other';
+export type TFileKind = 'html' | 'markdown' | 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'other';
 export type TFileGroup = 'documents' | 'media' | 'other';
 
 const KIND_BY_EXTENSION: Record<string, TFileKind> = {
@@ -28,7 +28,11 @@ const KIND_BY_EXTENSION: Record<string, TFileKind> = {
   flac: 'audio',
   pdf: 'pdf',
   txt: 'text',
-  md: 'text',
+  // Info: (20261106 - Luphia) Markdown 以排版後的文件呈現 (含 mermaid、數學式)
+  md: 'markdown',
+  markdown: 'markdown',
+  mdown: 'markdown',
+  mkd: 'markdown',
   json: 'text',
   csv: 'text',
   log: 'text',
@@ -57,6 +61,7 @@ export const getFileKind = (filename: string, mimeType?: string): TFileKind => {
   if (byExt) return byExt;
   if (!mimeType) return 'other';
   if (mimeType === 'text/html') return 'html';
+  if (mimeType === 'text/markdown') return 'markdown';
   if (mimeType === 'application/pdf') return 'pdf';
   if (mimeType.startsWith('image/')) return 'image';
   if (mimeType.startsWith('video/')) return 'video';
@@ -65,8 +70,11 @@ export const getFileKind = (filename: string, mimeType?: string): TFileKind => {
   return 'other';
 };
 
+// Info: (20261106 - Luphia) 以 sandbox 文件方式呈現的類型 (支援目錄、頁內搜尋、列印)
+export const isRenderedDocument = (kind: TFileKind | null): boolean => kind === 'html' || kind === 'markdown';
+
 export const getFileGroup = (kind: TFileKind): TFileGroup => {
-  if (kind === 'html' || kind === 'pdf' || kind === 'text') return 'documents';
+  if (kind === 'html' || kind === 'markdown' || kind === 'pdf' || kind === 'text') return 'documents';
   if (kind === 'image' || kind === 'video' || kind === 'audio') return 'media';
   return 'other';
 };
@@ -79,6 +87,7 @@ export const FILE_GROUP_LABELS: Record<TFileGroup, string> = {
 
 export const FILE_KIND_LABELS: Record<TFileKind, string> = {
   html: 'HTML document',
+  markdown: 'Markdown document',
   image: 'Image',
   video: 'Video',
   audio: 'Audio',
@@ -90,6 +99,7 @@ export const FILE_KIND_LABELS: Record<TFileKind, string> = {
 // Info: (20261105 - Luphia) 每種類型的標記色 (Tailwind class)
 export const FILE_KIND_DOT: Record<TFileKind, string> = {
   html: 'bg-orange-400',
+  markdown: 'bg-emerald-400',
   image: 'bg-violet-400',
   video: 'bg-pink-400',
   audio: 'bg-teal-400',
@@ -109,6 +119,8 @@ export const guessMimeType = (filename: string, fallback?: string): string => {
   const map: Record<string, string> = {
     html: 'text/html',
     htm: 'text/html',
+    md: 'text/markdown',
+    markdown: 'text/markdown',
     png: 'image/png',
     jpg: 'image/jpeg',
     jpeg: 'image/jpeg',

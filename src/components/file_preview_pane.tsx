@@ -5,6 +5,7 @@ import { FILE_KIND_LABELS, getFileKind } from '@/lib/file_types';
 import { formatBytes } from '@/lib/utils';
 import { DownloadIcon } from '@/components/icons';
 import HtmlViewer, { type IHtmlViewerHandle } from '@/components/html_viewer';
+import MarkdownViewer from '@/components/markdown_viewer';
 
 export type TViewMode = 'reading' | 'full' | 'source';
 
@@ -164,6 +165,25 @@ export default function FilePreviewPane({
   }
 
   const preventContext = (e: React.MouseEvent) => e.preventDefault();
+
+  if (kind === 'markdown' && load.text !== undefined) {
+    if (viewMode === 'source') return <CodeView text={load.text} />;
+    return (
+      <MarkdownViewer
+        ref={viewerRef}
+        filename={file.filename}
+        markdown={load.text}
+        options={previewOptions}
+        resolver={resolver}
+        fullWidth={viewMode === 'full'}
+        onOutline={onOutline}
+        onActiveHeading={onActiveHeading}
+        onOpenFile={onOpenFile}
+        onFindResult={onFindResult}
+        onPrepared={onPrepared}
+      />
+    );
+  }
 
   if ((kind === 'html' || kind === 'text') && load.text !== undefined) {
     if (kind === 'text' || viewMode === 'source') return <CodeView text={load.text} />;

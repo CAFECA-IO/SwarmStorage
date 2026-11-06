@@ -1,6 +1,6 @@
 import { isDownloadAllowed, isParityProtected, type ILariaMetadata, type IShardStats } from '@/lib/file_operator';
 import type { IHtmlPreviewOptions } from '@/lib/html_preview';
-import { FILE_KIND_LABELS, getFileKind, guessMimeType } from '@/lib/file_types';
+import { FILE_KIND_LABELS, getFileKind, guessMimeType, isRenderedDocument } from '@/lib/file_types';
 import { formatBytes } from '@/lib/utils';
 import { DownloadIcon } from '@/components/icons';
 import ToggleSwitch from '@/components/toggle_switch';
@@ -54,7 +54,7 @@ export default function FileInspector({
   onRepair,
 }: IFileInspectorProps) {
   const kind = getFileKind(file.filename, file.mimeType);
-  const isHtml = kind === 'html';
+  const isHtml = isRenderedDocument(kind);
   const canDownload = isDownloadAllowed(file);
   const hasParity = isParityProtected(file);
   const shardCount = file.shards.length;
@@ -199,7 +199,7 @@ export default function FileInspector({
       <section className="flex flex-col gap-1">
         <SectionTitle>Preview safety</SectionTitle>
         <p className="mb-1 text-[11px] text-slate-400">
-          {isHtml ? 'HTML opens in an isolated sandbox.' : 'Applies when an HTML document is open.'}
+          {isHtml ? `${kind === 'markdown' ? 'Markdown' : 'HTML'} opens in an isolated sandbox.` : 'Applies when an HTML or Markdown document is open.'}
         </p>
         <ToggleSwitch
           id="preview-scripts"

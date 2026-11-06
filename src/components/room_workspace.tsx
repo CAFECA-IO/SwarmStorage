@@ -14,6 +14,7 @@ import {
   getFileGroup,
   getFileKind,
   guessMimeType,
+  isRenderedDocument,
   type TFileGroup,
 } from '@/lib/file_types';
 import { formatBytes } from '@/lib/utils';
@@ -226,7 +227,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           const kind = getFileKind(name, meta.mimeType);
           const blob = new Blob([raw], { type: guessMimeType(name, meta.mimeType) });
           const state: IFileLoadState = { status: 'ready', progress: 100, blob };
-          if (kind === 'html' || kind === 'text') {
+          if (kind === 'html' || kind === 'markdown' || kind === 'text') {
             if (blob.size <= TEXT_PREVIEW_LIMIT) state.text = await blob.text();
           } else if (kind !== 'other') {
             state.url = URL.createObjectURL(blob);
@@ -516,7 +517,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         {unreadMessages > 99 ? '99+' : unreadMessages}
       </span>
     ) : null;
-  const showHtmlTools = activeKind === 'html' && loads[activeName || '']?.status === 'ready';
+  const showHtmlTools = isRenderedDocument(activeKind) && loads[activeName || '']?.status === 'ready';
   const canFind = showHtmlTools && viewMode !== 'source';
 
   // Info: (20261105 - Luphia) Ctrl/Cmd + F 聚焦頁內搜尋
@@ -611,7 +612,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
       {files && files.length === 0 && pendingUploads.length === 0 && <p className="px-1.5 text-sm text-slate-400">No files in this room yet.</p>}
 
-      {activeKind === 'html' && activeOutline.length > 0 && viewMode !== 'source' && (
+      {isRenderedDocument(activeKind) && activeOutline.length > 0 && viewMode !== 'source' && (
         <div className="flex flex-col gap-0.5 border-t border-white/10 pt-4">
           <p className="mx-1.5 mb-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">On this page</p>
           {activeOutline.map(item => (

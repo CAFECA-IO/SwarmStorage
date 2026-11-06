@@ -24,6 +24,8 @@ interface IHtmlViewerProps {
   options: IHtmlPreviewOptions;
   resolver: IRoomFileResolver;
   fullWidth: boolean;
+  // Info: (20261106 - Luphia) paper = 白紙卡片 (HTML)；app = 與介面一致的深色卡片 (Markdown)
+  appearance?: 'paper' | 'app';
   onOutline: (outline: IHtmlOutlineItem[]) => void;
   onActiveHeading: (id: string) => void;
   onOpenFile: (filename: string) => void;
@@ -42,6 +44,7 @@ export default function HtmlViewer({
   options,
   resolver,
   fullWidth,
+  appearance = 'paper',
   onOutline,
   onActiveHeading,
   onOpenFile,
@@ -121,7 +124,11 @@ export default function HtmlViewer({
         srcDoc={prepared.srcDoc}
         sandbox={PREVIEW_SANDBOX}
         referrerPolicy="no-referrer"
-        className={`bg-white ${fullWidth ? 'h-full w-full' : 'h-full w-full max-w-[880px] rounded-lg shadow-2xl shadow-black/40'}`}
+        className={
+          appearance === 'app'
+            ? `bg-[#0b1222] ${fullWidth ? 'h-full w-full' : 'h-full w-full max-w-[920px] rounded-xl border border-white/10'}`
+            : `bg-white ${fullWidth ? 'h-full w-full' : 'h-full w-full max-w-[880px] rounded-lg shadow-2xl shadow-black/40'}`
+        }
       />
     </div>
   );

@@ -13,6 +13,7 @@ const MAX_RECENT_FILES = 12;
 
 const KIND_TILE: Record<TFileKind, string> = {
   html: 'bg-orange-950 text-orange-300',
+  markdown: 'bg-emerald-950 text-emerald-300',
   image: 'bg-violet-950 text-violet-300',
   video: 'bg-pink-950 text-pink-300',
   audio: 'bg-teal-950 text-teal-300',
