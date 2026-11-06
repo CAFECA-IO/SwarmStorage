@@ -926,7 +926,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
                     runFind(true);
                   }
                 }}
-                className="min-w-0 flex-1 bg-transparent text-xs text-slate-100 outline-none placeholder:text-slate-500"
+                className="min-w-0 flex-1 bg-transparent text-xs text-slate-100 outline-none placeholder:text-slate-500 pointer-coarse:text-base"
               />
               {findStatus === 'missing' && <span className="shrink-0 text-[11px] text-amber-300">No match</span>}
               {findStatus === 'found' && (
@@ -1008,7 +1008,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   };
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-slate-950 font-sans text-slate-100 lg:flex-row">
+    <div className="fixed inset-x-0 top-viewport flex h-viewport flex-col overflow-hidden bg-slate-950 font-sans text-slate-100 lg:flex-row">
       {/* Info: (20261105 - Luphia) 手機版頂部列 */}
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 lg:hidden">
         <button
@@ -1031,7 +1031,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
       <nav
         aria-label="Room files"
-        className={`${navOpen ? 'fixed inset-0 z-40 flex' : 'hidden'} w-full flex-col gap-[18px] overflow-y-auto border-r border-white/10 bg-[#0D1424] px-3.5 py-[18px] lg:static lg:flex lg:w-[264px] lg:shrink-0`}
+        className={`${navOpen ? 'fixed inset-x-0 top-viewport z-40 flex h-viewport' : 'hidden'} w-full flex-col gap-[18px] overflow-y-auto border-r border-white/10 bg-[#0D1424] px-3.5 py-[18px] lg:static lg:flex lg:w-[264px] lg:shrink-0`}
       >
         {navOpen && (
           <button
@@ -1125,7 +1125,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
       <aside
         aria-label="Side panel"
-        className={`${inspectorOpen ? 'fixed inset-y-0 right-0 z-40 flex w-[min(340px,100vw)] shadow-2xl shadow-black' : 'hidden'} min-h-0 flex-col overflow-hidden border-l border-white/10 bg-[#0D1424] xl:static xl:flex xl:w-[320px] xl:shrink-0 xl:shadow-none`}
+        className={`${inspectorOpen ? 'fixed right-0 top-viewport z-40 flex h-viewport w-full shadow-2xl shadow-black sm:w-[340px]' : 'hidden'} min-h-0 flex-col overflow-hidden border-l border-white/10 bg-[#0D1424] xl:static xl:flex xl:w-[320px] xl:shrink-0 xl:shadow-none`}
       >
         <div className="flex items-center gap-1 border-b border-white/10 px-3 pt-3">
           <div role="tablist" aria-label="Side panel" className="flex flex-1 gap-1">
@@ -1252,7 +1252,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       )}
 
       {needsPassword && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+        <div className="fixed inset-x-0 top-viewport z-50 h-viewport flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
           <form
             onSubmit={handlePasswordSubmit}
             className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900 p-6 shadow-2xl"

@@ -79,7 +79,7 @@ export default function RoomCreateForm({ variant, onCreated, onCancel }: IRoomCr
         maxLength={60}
         onChange={e => setName(e.target.value)}
         placeholder="e.g. Lab data — kinetics"
-        className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500/40"
+        className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-100 pointer-coarse:text-base outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500/40"
       />
     </label>
   );
@@ -150,7 +150,7 @@ export default function RoomCreateForm({ variant, onCreated, onCancel }: IRoomCr
         maxLength={128}
         autoComplete="new-password"
         onChange={e => setPassword(e.target.value)}
-        className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-blue-500/40"
+        className="h-11 rounded-xl border border-white/10 bg-slate-950 px-3 text-sm text-slate-100 pointer-coarse:text-base outline-none focus:ring-2 focus:ring-blue-500/40"
       />
       <span className="text-[11px] text-slate-500">Password rooms still appear in the list with a lock.</span>
     </label>

@@ -49,7 +49,7 @@ export default function RoomSettingsPanel({ settings, saving, error, onChange }:
             value={name}
             maxLength={60}
             onChange={e => setName(e.target.value)}
-            className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950 px-3 text-[13px] text-slate-100 outline-none focus:ring-2 focus:ring-blue-500/40"
+            className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950 px-3 text-[13px] text-slate-100 pointer-coarse:text-base outline-none focus:ring-2 focus:ring-blue-500/40"
           />
           <button
             type="submit"
@@ -107,7 +107,7 @@ export default function RoomSettingsPanel({ settings, saving, error, onChange }:
             maxLength={128}
             placeholder={settings.hasPassword ? 'New password' : 'Set a password'}
             onChange={e => setPassword(e.target.value)}
-            className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950 px-3 text-[13px] text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500/40"
+            className="h-10 min-w-0 flex-1 rounded-lg border border-white/10 bg-slate-950 px-3 text-[13px] text-slate-100 pointer-coarse:text-base outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500/40"
           />
           <button
             type="submit"

@@ -312,13 +312,13 @@ export default function RoomLobby() {
       </div>
 
       {sheetOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden">
+        <div className="fixed inset-x-0 top-viewport z-50 h-viewport lg:hidden">
           <button type="button" aria-label="Close" onClick={() => setSheetOpen(false)} className="absolute inset-0 bg-slate-950/70" />
           <section
             role="dialog"
             aria-modal="true"
             aria-label="Create a room"
-            className="absolute inset-x-0 bottom-0 flex h-[min(640px,92dvh)] flex-col rounded-t-3xl border-t border-white/10 bg-slate-900 px-5 pb-6 pt-3"
+            className="absolute inset-x-0 bottom-0 flex h-[min(640px,92%)] flex-col rounded-t-3xl border-t border-white/10 bg-slate-900 px-5 pb-6 pt-3"
           >
             <div className="mb-2 flex items-center justify-between">
               <span className="mx-auto h-1 w-10 rounded-full bg-slate-700" aria-hidden="true" />

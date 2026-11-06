@@ -1,5 +1,19 @@
 @import "tailwindcss";
 
+/* Info: (20261106 - Luphia) 可視區域 (鍵盤開啟時縮小)；由 ViewportTracker 更新 */
+@utility h-viewport {
+  height: var(--vvh, 100dvh);
+}
+
+@utility top-viewport {
+  top: var(--vv-top, 0px);
+}
+
+html,
+body {
+  overscroll-behavior: none;
+}
+
 @keyframes floatUp {
   0% {
     transform: translateY(10px) scale(0.8);

@@ -38,6 +38,17 @@ export default function RoomChat({ chat, listClassName = 'flex-1 min-h-0', showH
     if (list && stickToBottom.current) list.scrollTop = list.scrollHeight;
   }, [entries.length]);
 
+  // Info: (20261106 - Luphia) 鍵盤開啟等原因使清單變矮時，仍停留在最新訊息
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      if (stickToBottom.current) list.scrollTop = list.scrollHeight;
+    });
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, []);
+
   const connected = status === 'connected';
   const trimmed = draft.trim();
   const tooLong = draft.length > MAX_LENGTH;
@@ -140,7 +151,7 @@ export default function RoomChat({ chat, listClassName = 'flex-1 min-h-0', showH
             rows={Math.min(4, Math.max(1, draft.split('\n').length))}
             placeholder={connected ? (me ? `Message as ${me.nickname}` : 'Message') : 'Chat unavailable'}
             disabled={!connected}
-            className="min-h-11 flex-1 resize-none rounded-xl border border-white/10 bg-slate-900 px-3 py-2.5 text-[13px] text-slate-100 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
+            className="min-h-11 flex-1 resize-none rounded-xl border border-white/10 bg-slate-900 px-3 py-2.5 text-[13px] text-slate-100 pointer-coarse:text-base outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-blue-500/40 disabled:opacity-60"
           />
           <button
             type="submit"

@@ -1,4 +1,5 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
+import ViewportTracker from '@/components/viewport_tracker';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -9,6 +10,14 @@ export const metadata: Metadata = {
   },
 };
 
+// Info: (20261106 - Luphia) Android Chrome 開啟鍵盤時縮小版面 (dvh 隨之改變)；iOS 由 ViewportTracker 處理
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  interactiveWidget: 'resizes-content',
+  themeColor: '#020617',
+};
+
 export default function RootLayout({
   children,
 }: {
@@ -16,7 +25,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <ViewportTracker />
+        {children}
+      </body>
     </html>
   );
 }
