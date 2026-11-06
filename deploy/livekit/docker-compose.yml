@@ -1,23 +1,44 @@
 # Info: (20261106 - Luphia)
-# 自架 LiveKit (單一節點)。媒體走 UDP，使用 host 網路避免 Docker NAT 的額外延遲與埠對應
+# 共用 LiveKit (DropHere + Hills)：docker compose up -d 即完成
+# - livekit-init：第一次自動產生 API key / secret，並依 .env 產生 livekit.yaml、Caddyfile
+# - caddy：自動申請 Let's Encrypt 憑證 (wss 信令與 TURN/TLS)
+# - livekit：媒體走 UDP，使用 host 網路
+# 只使用 named volume、不掛載主機檔案，遠端 Docker context 也能部署
 services:
-  livekit:
-    image: livekit/livekit-server:v1.13.11
-    command: --config /etc/livekit.yaml
-    network_mode: host
-    restart: unless-stopped
+  livekit-init:
+    build: .
+    entrypoint: ["/bin/sh", "/opt/drophere/init.sh"]
+    env_file: .env
     volumes:
-      - ./livekit.yaml:/etc/livekit.yaml:ro
-      - ./certs:/certs:ro
+      - livekit-config:/config
+    restart: "no"
 
-  # Info: (20261106 - Luphia) wss:// 信令的 TLS；也可沿用既有的 Caddy / Nginx
   caddy:
     image: caddy:2
+    command: caddy run --config /config/Caddyfile --adapter caddyfile
     network_mode: host
     restart: unless-stopped
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - livekit-config:/config:ro
       - caddy-data:/data
 
+  livekit:
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    env_file: .env
+    depends_on:
+      livekit-init:
+        condition: service_completed_successfully
+    volumes:
+      - livekit-config:/config:ro
+      - caddy-data:/caddy:ro
+    tmpfs:
+      - /run/livekit
+
 volumes:
+  livekit-config:
   caddy-data:

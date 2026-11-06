@@ -24,38 +24,75 @@ DropHere 房間通話與 Hills（M4 會議）共用同一套自架 LiveKit SFU�
 
 | 埠 | 協定 | 用途 |
 |----|------|------|
+| 80 | TCP | Let's Encrypt 驗證（HTTP-01） |
 | 443 | TCP | `wss://livekit.cafeca.io`（Caddy → 7880） |
 | 7881 | TCP | 媒體的 TCP 備援 |
 | 7882 | UDP | 媒體（單一埠多工） |
 | 5349 | TCP | TURN/TLS（公司網路只允許 TLS 時） |
 | 3478 | UDP | TURN/UDP |
 
-**不要**讓 Cloudflare 等 HTTP 代理擋在 LiveKit 前面：媒體是 UDP，代理不會轉送。
+7880（LiveKit HTTP）只供本機 Caddy 使用，防火牆不要對外開放。**不要**讓 Cloudflare 等 HTTP 代理擋在 LiveKit 前面：媒體是 UDP，代理不會轉送。
 
 ## 2. 安裝
 
+API key / secret 與 TLS 憑證**全部自動產生**，不需手動填寫或放置憑證檔：
+
 ```bash
 cd deploy/livekit
-cp livekit.yaml.example livekit.yaml      # 填入三組 secret（各至少 32 字元，例如 openssl rand -base64 33）
-cp Caddyfile.example Caddyfile
-mkdir certs                               # 放入 turn.cafeca.io 的憑證與私鑰
-docker compose up -d
-curl -s https://livekit.cafeca.io         # 回傳 OK
+cp env.example .env        # 只需填網域 (LIVEKIT_DOMAIN、TURN_DOMAIN) 與 ACME_EMAIL
+docker compose up -d --build
+curl -s https://livekit.cafeca.io          # 回傳 OK
 ```
 
-金鑰分配：
+| 服務 | 做什麼 |
+|------|--------|
+| `livekit-init` | 第一次執行時以 `/dev/urandom` 隨機產生三組 API key / secret（48 字元），存在 `livekit-config` volume；之後每次啟動依 `.env` 重新產生 `livekit.yaml`、`Caddyfile` 與各服務的連線設定，金鑰沿用 |
+| `caddy` | 自動向 Let's Encrypt 申請並續期 `LIVEKIT_DOMAIN`（wss 信令）與 `TURN_DOMAIN` 的憑證 |
+| `livekit` | 從 Caddy 的憑證目錄取得 TURN/TLS 憑證後啟動；憑證尚未取得時先以不含 TURN 的設定啟動，取得後立即切換；之後續期的憑證在 `CERT_RELOAD_HOUR_UTC`（預設 20 = 台灣凌晨 4 點）重新啟動載入，避免白天中斷通話 |
 
-| key | 持有者 | 用途 |
-|-----|--------|------|
-| `drophere` | DropHere | 簽發入場憑證、呼叫 LiveKit API |
-| `hills` | hills-call | 同上（Hills 的房間） |
-| `webhook` | DropHere、Hills | 驗證 LiveKit webhook（LiveKit 只能設定一組） |
+只使用 named volume、不掛載主機檔案，在遠端 Docker context 也能部署（與 Hills 的 relay / mailbox 相同做法）。
 
-任一服務外洩時只需撤換它自己的 key。
+### 取得各服務的設定
+
+```bash
+docker compose run --rm livekit-init show drophere   # DropHere 的 .env.local 內容
+docker compose run --rm livekit-init show hills      # Hills hills-call
+```
+
+輸出含 secret，只貼到對應服務的設定，不要提交到 repo 或貼到聊天室。
+
+金鑰分配（key ID 為隨機的 `API…` 字串）：
+
+| 金鑰 | 持有者 | 用途 |
+|------|--------|------|
+| drophere | DropHere | 簽發入場憑證、呼叫 LiveKit API |
+| hills | hills-call | 同上（Hills 的房間） |
+| webhook | DropHere、Hills | 驗證 LiveKit webhook（LiveKit 只能設定一組） |
+
+### 撤換金鑰
+
+任一服務外洩時只需撤換它自己的那組：
+
+```bash
+docker compose run --rm livekit-init rotate drophere   # drophere | hills | webhook
+docker compose restart livekit
+docker compose run --rm livekit-init show drophere     # 更新 DropHere 的 .env.local 後重新啟動 DropHere
+```
+
+### 修改網域或其他設定
+
+```bash
+vi .env
+docker compose up -d && docker compose restart caddy livekit
+```
+
+### 備份
+
+`livekit-config` volume 保存金鑰；遺失時重新部署會產生新金鑰，需要更新 DropHere / Hills 的設定。`caddy-data` 保存憑證，遺失時會自動重新申請。
 
 ## 3. DropHere 設定
 
-把 `drophere.env.example` 的內容寫入專案根目錄的 `.env.local`（已被 `.gitignore` 忽略），重新啟動 `npm run swarm`。未設定 `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` 時，房間不顯示通話按鈕。
+把 `show drophere` 的輸出寫入 DropHere 專案根目錄的 `.env.local`（已被 `.gitignore` 忽略），重新啟動 `npm run swarm`。未設定 `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` 時，房間不顯示通話按鈕。
 
 | API | 說明 |
 |-----|------|
@@ -84,7 +121,7 @@ curl -s https://livekit.cafeca.io         # 回傳 OK
 在**正式主機以外**的機器執行（測試工具本身很吃 CPU 與頻寬）：
 
 ```bash
-lk load-test --url wss://livekit.cafeca.io --api-key drophere --api-secret <secret> \
+lk load-test --url wss://livekit.cafeca.io --api-key <drophere key> --api-secret <drophere secret> \
   --room drophere-loadtest --video-publishers 10 --audio-publishers 50 --subscribers 40 \
   --video-resolution high --duration 2m
 ```
@@ -93,4 +130,4 @@ lk load-test --url wss://livekit.cafeca.io --api-key drophere --api-secret <secr
 
 ## 6. Hills 端（M4）
 
-依 Hills technical-design-m2-m5 §6：`hills-call` 以組織憑證鏈換取 `hills` key 簽發的入場憑證，房間名稱使用 `hills-` 前綴 + blake3(orgId ‖ meetingId)。webhook 以 `webhook` key 驗證，略過 `drophere-` 開頭的房間。決策 D10 / 提案 P3 需在 Hills 決策表確認後再實作。
+依 Hills technical-design-m2-m5 §6：`hills-call` 以組織憑證鏈換取 `hills` key 簽發的入場憑證，房間名稱使用 `hills-` 前綴 + blake3(orgId ‖ meetingId)。設定以 `show hills` 取得（已含 `LIVEKIT_ROOM_PREFIX=hills-`）；webhook 以 webhook 金鑰驗證，略過 `drophere-` 開頭的房間。決策 D10 / 提案 P3 需在 Hills 決策表確認後再實作。
