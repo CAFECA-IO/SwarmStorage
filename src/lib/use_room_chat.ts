@@ -29,6 +29,8 @@ export interface IRoomChat {
   uploads: IUploadStatus[];
   reportUpload: (report: IUploadReportInput) => Promise<boolean>;
   getToken: () => string | null;
+  // Info: (20261106 - Luphia) 通話人數 (由伺服器推送；尚未收到時為 null)
+  callParticipants: number | null;
 }
 
 export interface IUploadReportInput {
@@ -62,6 +64,7 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
   const [entries, setEntries] = useState<TChatEntry[]>([]);
   const [sendError, setSendError] = useState('');
   const [uploads, setUploads] = useState<Record<string, IUploadStatus>>({});
+  const [callParticipants, setCallParticipants] = useState<number | null>(null);
 
   const onFileRef = useRef(onFile);
   const onFileRemovedRef = useRef(onFileRemoved);
@@ -146,6 +149,8 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
         onFileRemovedRef.current?.(event.filename);
       } else if (event.type === 'room-settings') {
         onRoomSettingsRef.current?.(event.settings);
+      } else if (event.type === 'call') {
+        setCallParticipants(event.participants);
       } else if (event.type === 'message') {
         push({ kind: 'message', id: event.message.id, message: event.message });
       } else if (event.type === 'presence') {
@@ -271,6 +276,7 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
     uploads: Object.values(uploads).sort((a, b) => a.startedAt - b.startedAt),
     reportUpload,
     getToken,
+    callParticipants,
     me,
     online,
     entries,

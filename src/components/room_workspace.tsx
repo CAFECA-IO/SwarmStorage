@@ -19,7 +19,10 @@ import {
 } from '@/lib/file_types';
 import { formatBytes } from '@/lib/utils';
 import { ApiCode } from '@/lib/status';
-import { ClockIcon, LockIcon, XIcon } from '@/components/icons';
+import { ClockIcon, LockIcon, VideoIcon, XIcon } from '@/components/icons';
+import { RoomAudioRenderer, RoomContext } from '@livekit/components-react';
+import { CallJoinPanel, CallMiniBar, CallStage } from '@/components/room_call';
+import { useRoomCall } from '@/lib/use_room_call';
 import FilePreviewPane, { type IFileLoadState, type TViewMode } from '@/components/file_preview_pane';
 import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
@@ -240,6 +243,16 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     onRoomSettings: handleRoomSettings,
   });
 
+  // Info: (20261106 - Luphia) 視訊會議 (共用 LiveKit)；callOpen 表示主畫面顯示通話
+  const call = useRoomCall({
+    roomId,
+    getChatToken: chat.getToken,
+    chatReady: chat.status === 'connected',
+    pushedParticipants: chat.callParticipants,
+  });
+  const [callOpen, setCallOpen] = useState(false);
+  const inCall = call.room !== null;
+
   const pushToastRef = useRef(pushToast);
   useEffect(() => {
     pushToastRef.current = pushToast;
@@ -328,6 +341,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       // Info: (20261105 - Luphia) 沒有開啟檔案時側欄顯示聊天；開啟檔案後切到 Details，視為已讀
       if (!activeNameRef.current) setSeenMessages(othersCountRef.current);
       setOpenTabs(prev => (prev.includes(name) ? prev : [...prev, name]));
+      setCallOpen(false);
       setActiveName(name);
       setActiveHeading('');
       setFindStatus('idle');
@@ -754,10 +768,11 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         onClick={() => {
           setActiveName(null);
           setActiveHeading('');
+          setCallOpen(false);
           setNavOpen(false);
         }}
-        aria-current={!activeName ? 'page' : undefined}
-        className={`flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${!activeName ? 'bg-slate-800 font-semibold text-white' : 'text-slate-300 hover:bg-white/5'}`}
+        aria-current={!activeName && !callOpen ? 'page' : undefined}
+        className={`flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${!activeName && !callOpen ? 'bg-slate-800 font-semibold text-white' : 'text-slate-300 hover:bg-white/5'}`}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M3 12h4l3 8 4-16 3 8h4" />
@@ -769,6 +784,26 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           </span>
         )}
       </button>
+
+      {call.enabled && (
+        <button
+          type="button"
+          onClick={() => {
+            setCallOpen(true);
+            setNavOpen(false);
+          }}
+          aria-current={callOpen ? 'page' : undefined}
+          className={`-mt-3.5 flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${callOpen ? 'bg-slate-800 font-semibold text-white' : 'text-slate-300 hover:bg-white/5'}`}
+        >
+          <VideoIcon className="h-4 w-4" />
+          <span className="flex-1">{inCall ? 'In call' : 'Video call'}</span>
+          {call.participants > 0 && (
+            <span className="rounded-full bg-emerald-600 px-[7px] text-[10px] font-bold leading-[18px] text-white" aria-label={`${call.participants} people in the call`}>
+              {call.participants}
+            </span>
+          )}
+        </button>
+      )}
 
       {GROUP_ORDER.filter(group => groups[group].length > 0 || uploadGroups[group].length > 0).map(group => (
         <div key={group} className="flex flex-col gap-0.5">
@@ -849,7 +884,49 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     </>
   );
 
+  const callAction = call.enabled ? (
+    <button
+      type="button"
+      onClick={() => setCallOpen(true)}
+      className="inline-flex h-10 items-center gap-2 rounded-xl bg-emerald-600 px-4 text-[13px] font-semibold text-white hover:bg-emerald-500"
+    >
+      <VideoIcon className="h-4 w-4" />
+      {inCall ? 'Open call' : call.participants > 0 ? `Join call · ${call.participants}` : 'Start call'}
+    </button>
+  ) : null;
+
   const renderMain = () => {
+    if (callOpen && call.enabled && !errorMessage && files) {
+      if (call.room) {
+        return (
+          <CallStage
+            isOwner={isOwner}
+            maxParticipants={call.maxParticipants}
+            notice={call.notice}
+            onDismissNotice={call.clearNotice}
+            onLeave={() => {
+              call.leave();
+              setCallOpen(false);
+            }}
+            onModerate={(identity, action) => {
+              call.moderate(identity, action);
+            }}
+            onMinimize={() => setCallOpen(false)}
+          />
+        );
+      }
+      return (
+        <CallJoinPanel
+          participants={call.participants}
+          maxParticipants={call.maxParticipants}
+          joining={call.state === 'joining'}
+          error={call.error}
+          notice={call.notice}
+          onJoin={options => call.join(options)}
+          onCancel={() => setCallOpen(false)}
+        />
+      );
+    }
     if (isLoading && !files) {
       return <div className="flex flex-1 items-center justify-center font-mono text-sm text-slate-400 animate-pulse">Scanning blocks…</div>;
     }
@@ -872,6 +949,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           onUpload={() => fileInputRef.current?.click()}
           getActions={getFileActions}
           canDelete={canManageFile}
+          callAction={callAction}
           onDelete={file => handleDelete(file.filename)}
           files={files || []}
           uploads={chat.uploads}
@@ -1008,6 +1086,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   };
 
   return (
+    <RoomContext.Provider value={call.room ?? undefined}>
+    {call.room && <RoomAudioRenderer />}
     <div className="fixed inset-x-0 top-viewport flex h-viewport flex-col overflow-hidden bg-slate-950 font-sans text-slate-100 lg:flex-row">
       {/* Info: (20261105 - Luphia) 手機版頂部列 */}
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2 lg:hidden">
@@ -1019,6 +1099,17 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           Files
         </button>
         <span className="flex-1 truncate font-mono text-xs text-slate-300">#{roomId}</span>
+        {call.enabled && (
+          <button
+            type="button"
+            onClick={() => setCallOpen(true)}
+            aria-label={inCall ? 'Open call' : 'Video call'}
+            className={`inline-flex h-10 items-center gap-1.5 rounded-lg px-3 text-xs font-semibold ${inCall ? 'bg-emerald-600 text-white' : 'border border-white/10 text-slate-200'}`}
+          >
+            <VideoIcon className="h-4 w-4" />
+            {call.participants > 0 && <span>{call.participants}</span>}
+          </button>
+        )}
         <button
           type="button"
           onClick={openChatDrawer}
@@ -1100,6 +1191,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
                       setActiveName(name);
                       setActiveHeading('');
                       setFindStatus('idle');
+                      setCallOpen(false);
                     }}
                     onKeyDown={e => handleTabKeyDown(e, index)}
                     className={`flex items-center gap-2 whitespace-nowrap text-[13px] ${selected ? 'font-semibold text-white' : 'text-slate-400 hover:text-slate-200'}`}
@@ -1121,6 +1213,20 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           </div>
         )}
         {renderMain()}
+        {inCall && !callOpen && (
+          <CallMiniBar
+            onOpen={() => setCallOpen(true)}
+            onLeave={() => call.leave()}
+          />
+        )}
+        {!inCall && !callOpen && call.notice && (
+          <div className="flex items-center gap-2 border-t border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-200" role="status">
+            <span className="flex-1">{call.notice}</span>
+            <button type="button" onClick={call.clearNotice} className="font-semibold hover:text-amber-100">
+              Dismiss
+            </button>
+          </div>
+        )}
       </main>
 
       <aside
@@ -1291,5 +1397,6 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         </div>
       )}
     </div>
+    </RoomContext.Provider>
   );
 }

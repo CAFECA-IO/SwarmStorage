@@ -252,6 +252,8 @@ interface IRoomActivityProps {
   getActions: (file: ILariaMetadata) => IFileAction[];
   canDelete: (file: ILariaMetadata) => boolean;
   onDelete: (file: ILariaMetadata) => void;
+  // Info: (20261106 - Luphia) 通話按鈕 (未啟用通話時為 null)
+  callAction?: React.ReactNode;
 }
 
 /**
@@ -281,6 +283,7 @@ export default function RoomActivity({
   getActions,
   canDelete,
   onDelete,
+  callAction = null,
 }: IRoomActivityProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const uploading = uploads.filter(u => u.status === 'uploading').length;
@@ -311,6 +314,7 @@ export default function RoomActivity({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            {callAction}
             <button
               type="button"
               aria-expanded={shareOpen}

@@ -147,3 +147,59 @@ export const ShareIcon = ({ className }: { className?: string }) => (
     <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
   </svg>
 );
+
+// Info: (20261106 - Luphia) 通話用圖示
+const callIcon = (paths: React.ReactNode) =>
+  function CallIcon({ className }: { className?: string }) {
+    return (
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+        {paths}
+      </svg>
+    );
+  };
+
+export const VideoIcon = callIcon(
+  <>
+    <path d="m16 13 5.2 3.5a.5.5 0 0 0 .8-.4V7.9a.5.5 0 0 0-.8-.4L16 11" />
+    <rect x="2" y="6" width="14" height="12" rx="2" />
+  </>
+);
+export const VideoOffIcon = callIcon(
+  <>
+    <path d="M10.7 6H14a2 2 0 0 1 2 2v3.3l1 1L22 7v10" />
+    <path d="M16 16a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h2" />
+    <path d="m2 2 20 20" />
+  </>
+);
+export const MicIcon = callIcon(
+  <>
+    <rect x="9" y="2" width="6" height="12" rx="3" />
+    <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+    <path d="M12 18v4" />
+  </>
+);
+export const MicOffIcon = callIcon(
+  <>
+    <path d="m2 2 20 20" />
+    <path d="M18.9 13.5A7 7 0 0 0 19 11v-1" />
+    <path d="M15 9.3V5a3 3 0 0 0-5.7-1.3" />
+    <path d="M9 9v2a3 3 0 0 0 5.1 2.1" />
+    <path d="M5 10v1a7 7 0 0 0 11.6 5.3" />
+    <path d="M12 18v4" />
+  </>
+);
+export const ScreenShareIcon = callIcon(
+  <>
+    <rect x="2" y="3" width="20" height="14" rx="2" />
+    <path d="M8 21h8" />
+    <path d="M12 17v4" />
+    <path d="m9 10 3-3 3 3" />
+    <path d="M12 7v6" />
+  </>
+);
+export const PhoneOffIcon = callIcon(
+  <>
+    <path d="M10.7 13.3a16 16 0 0 0 3.4 2.6l1.3-1.3a2 2 0 0 1 2.1-.4c.8.3 1.6.5 2.5.6A2 2 0 0 1 22 16.9v3a2 2 0 0 1-2.2 2A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.3 1.7.6 2.5a2 2 0 0 1-.4 2.1L8 9.6" />
+    <path d="m22 2-20 20" />
+  </>
+);

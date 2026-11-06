@@ -12,6 +12,7 @@ import {
   type IRoomConfig,
   type TUploadPolicy,
 } from '@/lib/room_access';
+import { endCall } from '@/lib/call_service';
 import { announceFile, announceFileRemoved, closeRoom, onlineCount, uploadingCount } from '@/lib/chat_hub';
 
 /**
@@ -496,6 +497,7 @@ export async function cleanupRooms() {
       const expiresAt = config.expiration?.expiresAt;
       if (typeof expiresAt === 'number' && now > expiresAt) {
         closeRoom(roomId);
+        endCall(roomId);
         await fs.rm(roomPath, { recursive: true, force: true });
         continue;
       }
@@ -514,6 +516,7 @@ export async function cleanupRooms() {
       const files = await listRoomFiles(roomPath);
       const created = config.createdAt ?? (await fs.stat(roomPath)).mtimeMs;
       if (files.length === 0 && onlineCount(roomId) === 0 && now - created > EMPTY_ROOM_TTL_MS) {
+        endCall(roomId);
         await fs.rm(roomPath, { recursive: true, force: true });
       }
     } catch (err) {

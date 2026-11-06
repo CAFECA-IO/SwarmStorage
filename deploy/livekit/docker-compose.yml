@@ -1,0 +1,23 @@
+# Info: (20261106 - Luphia)
+# 自架 LiveKit (單一節點)。媒體走 UDP，使用 host 網路避免 Docker NAT 的額外延遲與埠對應
+services:
+  livekit:
+    image: livekit/livekit-server:v1.13.11
+    command: --config /etc/livekit.yaml
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+      - ./certs:/certs:ro
+
+  # Info: (20261106 - Luphia) wss:// 信令的 TLS；也可沿用既有的 Caddy / Nginx
+  caddy:
+    image: caddy:2
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+
+volumes:
+  caddy-data:

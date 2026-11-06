@@ -50,6 +50,7 @@ export type TChatEvent =
   | { type: 'file'; metadata: Record<string, unknown>; uploadId: string | null }
   | { type: 'file-removed'; filename: string }
   | { type: 'room-settings'; settings: Record<string, unknown> }
+  | { type: 'call'; participants: number }
   | { type: 'message'; message: IChatMessage }
   | { type: 'presence'; action: 'join' | 'leave'; member: IChatMember; online: number }
   | { type: 'expired' }
@@ -407,6 +408,11 @@ export function announceFileRemoved(roomId: string, filename: string) {
  */
 export function announceRoomSettings(roomId: string, settings: Record<string, unknown>) {
   broadcast(roomId, { type: 'room-settings', settings });
+}
+
+// Info: (20261106 - Luphia) 通話人數變更 (由 LiveKit webhook 或入場時更新)
+export function announceCall(roomId: string, participants: number) {
+  broadcast(roomId, { type: 'call', participants });
 }
 
 export function uploadingCount(roomId: string): number {
