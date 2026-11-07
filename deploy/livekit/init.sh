@@ -59,6 +59,23 @@ esac
 : "${LIVEKIT_DOMAIN:?請在 .env 設定 LIVEKIT_DOMAIN (例如 livekit.cafeca.io)}"
 TURN_DOMAIN=${TURN_DOMAIN:-}
 MAX_PARTICIPANTS=${MAX_PARTICIPANTS:-50}
+# Info: (20261108 - Luphia) wss 信令預設使用 443；HTTP 埠用於 Let's Encrypt HTTP-01 驗證
+LIVEKIT_PORT=${LIVEKIT_PORT:-443}
+ACME_HTTP_PORT=${ACME_HTTP_PORT:-80}
+case "$LIVEKIT_PORT" in ''|*[!0-9]*) echo "LIVEKIT_PORT 必須是數字" >&2; exit 1 ;; esac
+case "$ACME_HTTP_PORT" in ''|*[!0-9]*) echo "ACME_HTTP_PORT 必須是數字" >&2; exit 1 ;; esac
+for reserved in 7880 7881 7882 3478 5349; do
+  [ "$LIVEKIT_PORT" = "$reserved" ] && { echo "LIVEKIT_PORT 與 LiveKit 內部使用的 $reserved 衝突" >&2; exit 1; }
+done
+if [ "$LIVEKIT_PORT" = "$ACME_HTTP_PORT" ]; then
+  echo "LIVEKIT_PORT 與 ACME_HTTP_PORT 不可相同" >&2
+  exit 1
+fi
+if [ "$LIVEKIT_PORT" = 443 ]; then
+  PUBLIC_URL="wss://$LIVEKIT_DOMAIN"
+else
+  PUBLIC_URL="wss://$LIVEKIT_DOMAIN:$LIVEKIT_PORT"
+fi
 ensure_secrets
 # shellcheck disable=SC1090
 . "$SECRETS"
@@ -119,18 +136,36 @@ render_livekit false > "$CONFIG_DIR/livekit.noturn.yaml.tmp" && mv "$CONFIG_DIR/
 printf '%s' "$TURN_DOMAIN" > "$CONFIG_DIR/turn_domain"
 
 # --- Info: (20261106 - Luphia) Caddy：wss 信令的 TLS，並替 TURN 網域取得憑證 ---
+# Info: (20261108 - Luphia) 預設在 443 提供 wss；改用其他埠時，TLS-ALPN 驗證 (必須走 443) 會關閉，只用 HTTP-01
+is_local() {
+  case "$1" in localhost|*.localhost|127.*) return 0 ;; *) return 1 ;; esac
+}
+tls_block() {
+  is_local "$1" && return 0
+  [ "$LIVEKIT_PORT" = 443 ] && return 0
+  printf '\ttls {\n\t\tissuer acme {\n'
+  [ -n "${ACME_EMAIL:-}" ] && printf '\t\t\temail %s\n' "$ACME_EMAIL"
+  printf '\t\t\tdisable_tlsalpn_challenge\n\t\t}\n\t}\n'
+}
 {
-  if [ -n "${ACME_EMAIL:-}" ]; then printf '{\n\temail %s\n}\n\n' "$ACME_EMAIL"; fi
-  printf '%s {\n\treverse_proxy 127.0.0.1:7880\n}\n' "$LIVEKIT_DOMAIN"
+  printf '{\n\thttp_port %s\n\thttps_port %s\n' "$ACME_HTTP_PORT" "$LIVEKIT_PORT"
+  # Info: (20261108 - Luphia) 使用 443 時沿用 Caddy 預設的簽發流程 (Let's Encrypt，失敗時改用 ZeroSSL)
+  if [ "$LIVEKIT_PORT" = 443 ] && [ -n "${ACME_EMAIL:-}" ]; then printf '\temail %s\n' "$ACME_EMAIL"; fi
+  printf '}\n\n'
+  printf '%s {\n' "$LIVEKIT_DOMAIN"
+  tls_block "$LIVEKIT_DOMAIN"
+  printf '\treverse_proxy 127.0.0.1:7880\n}\n'
   if [ -n "$TURN_DOMAIN" ]; then
-    printf '\n%s {\n\trespond "TURN" 200\n}\n' "$TURN_DOMAIN"
+    printf '\n%s {\n' "$TURN_DOMAIN"
+    tls_block "$TURN_DOMAIN"
+    printf '\trespond "TURN" 200\n}\n'
   fi
 } > "$CONFIG_DIR/Caddyfile"
 
 # --- Info: (20261106 - Luphia) 給各服務的連線設定 ---
 {
   echo "# DropHere：寫入專案根目錄的 .env.local"
-  echo "LIVEKIT_URL=wss://$LIVEKIT_DOMAIN"
+  echo "LIVEKIT_URL=$PUBLIC_URL"
   echo "LIVEKIT_API_KEY=$DROPHERE_API_KEY"
   echo "LIVEKIT_API_SECRET=$DROPHERE_API_SECRET"
   echo "LIVEKIT_WEBHOOK_API_KEY=$WEBHOOK_API_KEY"
@@ -139,7 +174,7 @@ printf '%s' "$TURN_DOMAIN" > "$CONFIG_DIR/turn_domain"
 } > "$CONFIG_DIR/drophere.env"
 {
   echo "# Hills hills-call (M4)"
-  echo "LIVEKIT_URL=wss://$LIVEKIT_DOMAIN"
+  echo "LIVEKIT_URL=$PUBLIC_URL"
   echo "LIVEKIT_API_KEY=$HILLS_API_KEY"
   echo "LIVEKIT_API_SECRET=$HILLS_API_SECRET"
   echo "LIVEKIT_WEBHOOK_API_KEY=$WEBHOOK_API_KEY"
@@ -149,5 +184,5 @@ printf '%s' "$TURN_DOMAIN" > "$CONFIG_DIR/turn_domain"
 
 # Info: (20261106 - Luphia) Caddy 與 LiveKit 以非 root 以外的身分讀取時也能使用
 chmod 644 "$CONFIG_DIR/Caddyfile" "$CONFIG_DIR/turn_domain"
-echo "[init] 設定已更新：wss://$LIVEKIT_DOMAIN${TURN_DOMAIN:+，TURN/TLS $TURN_DOMAIN:5349}"
+echo "[init] 設定已更新：$PUBLIC_URL${TURN_DOMAIN:+，TURN/TLS $TURN_DOMAIN:5349}"
 echo "[init] 取得 DropHere 設定：docker compose run --rm livekit-init show drophere"

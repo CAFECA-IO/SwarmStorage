@@ -15,21 +15,24 @@ services:
 
   caddy:
     image: caddy:2
-    command: caddy run --config /config/Caddyfile --adapter caddyfile
+    # Info: (20261108 - Luphia) 設定放在 /etc/livekit；/config 留給 Caddy 自己 (XDG_CONFIG_HOME)
+    command: caddy run --config /etc/livekit/Caddyfile --adapter caddyfile
     network_mode: host
     restart: unless-stopped
     depends_on:
       livekit-init:
         condition: service_completed_successfully
     volumes:
-      - livekit-config:/config:ro
+      - livekit-config:/etc/livekit:ro
       - caddy-data:/data
 
   livekit:
     build: .
     network_mode: host
     restart: unless-stopped
-    env_file: .env
+    # Info: (20261108 - Luphia) 不傳入整份 .env：livekit-server 會讀取 LIVEKIT_* / NODE_IP 等環境變數覆蓋設定
+    environment:
+      CERT_RELOAD_HOUR_UTC: ${CERT_RELOAD_HOUR_UTC:-20}
     depends_on:
       livekit-init:
         condition: service_completed_successfully

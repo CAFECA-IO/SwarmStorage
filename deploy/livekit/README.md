@@ -16,7 +16,7 @@ DropHere 房間通話與 Hills（M4 會議）共用同一套自架 LiveKit SFU�
 
 | 項目 | 建議 |
 |------|------|
-| 主機 | 4–8 vCPU、8 GB RAM、1 Gbps 網卡，與 relay.cafeca.io 分開 |
+| 主機 | 4–8 vCPU、8 GB RAM、1 Gbps 網卡；影音流量大，建議與 relay.cafeca.io 分開 |
 | 頻寬 | 一個 50 人滿房約進 100 Mbps、出 150–200 Mbps（依開鏡頭人數而定） |
 | 網域 | `livekit.cafeca.io`（信令，wss）、`turn.cafeca.io`（TURN/TLS） |
 
@@ -30,6 +30,11 @@ DropHere 房間通話與 Hills（M4 會議）共用同一套自架 LiveKit SFU�
 | 7882 | UDP | 媒體（單一埠多工） |
 | 5349 | TCP | TURN/TLS（公司網路只允許 TLS 時） |
 | 3478 | UDP | TURN/UDP |
+
+主機上已有服務佔用 443 或 80 時：
+
+- `LIVEKIT_PORT` 改成其他埠（例如 7443），連線網址會變成 `wss://livekit.cafeca.io:7443`；只允許 443 對外連線的網路將無法加入通話。
+- `ACME_HTTP_PORT` 改成其他埠（例如 8080），並在佔用 80 的服務把 `livekit.cafeca.io`、`turn.cafeca.io` 的 `/.well-known/acme-challenge/` 轉送到 `127.0.0.1:8080`（Let's Encrypt 一定從外部連到 80 埠驗證）。
 
 7880（LiveKit HTTP）只供本機 Caddy 使用，防火牆不要對外開放。**不要**讓 Cloudflare 等 HTTP 代理擋在 LiveKit 前面：媒體是 UDP，代理不會轉送。
 
@@ -47,7 +52,7 @@ curl -s https://livekit.cafeca.io          # 回傳 OK
 | 服務 | 做什麼 |
 |------|--------|
 | `livekit-init` | 第一次執行時以 `/dev/urandom` 隨機產生三組 API key / secret（48 字元），存在 `livekit-config` volume；之後每次啟動依 `.env` 重新產生 `livekit.yaml`、`Caddyfile` 與各服務的連線設定，金鑰沿用 |
-| `caddy` | 自動向 Let's Encrypt 申請並續期 `LIVEKIT_DOMAIN`（wss 信令）與 `TURN_DOMAIN` 的憑證 |
+| `caddy` | 在 443（`LIVEKIT_PORT`）提供 wss 信令，並自動向 Let's Encrypt 申請、續期 `LIVEKIT_DOMAIN` 與 `TURN_DOMAIN` 的憑證 |
 | `livekit` | 從 Caddy 的憑證目錄取得 TURN/TLS 憑證後啟動；憑證尚未取得時先以不含 TURN 的設定啟動，取得後立即切換；之後續期的憑證在 `CERT_RELOAD_HOUR_UTC`（預設 20 = 台灣凌晨 4 點）重新啟動載入，避免白天中斷通話 |
 
 只使用 named volume、不掛載主機檔案，在遠端 Docker context 也能部署（與 Hills 的 relay / mailbox 相同做法）。
