@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import Link from 'next/link';
+import AccountButton from '@/components/account_button';
 import { useRouter } from 'next/navigation';
 import type { IRoomSummary } from '@/lib/room_store';
 import { ApiCode } from '@/lib/status';
@@ -155,9 +156,12 @@ export default function RoomLobby() {
         <main className="flex min-w-0 flex-1 flex-col gap-5 px-9 py-7">
           <header className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <Link href="/" className="text-xl font-bold text-blue-400">
-                Drop Here
-              </Link>
+              <div className="flex items-center gap-4">
+                <Link href="/" className="text-xl font-bold text-blue-400">
+                  Drop Here
+                </Link>
+                <AccountButton />
+              </div>
               <h1 className="mt-2.5 text-[26px] font-bold">Rooms</h1>
               <p className="mt-1 text-[13px] text-slate-400">Pick a room to enter, or create one on the right.</p>
             </div>
@@ -229,9 +233,12 @@ export default function RoomLobby() {
 
       {/* Info: (20261106 - Luphia) 手機版 (V3) */}
       <div className="flex flex-col gap-6 px-5 py-6 lg:hidden">
-        <Link href="/" className="text-xl font-bold text-blue-400">
-          Drop Here
-        </Link>
+        <div className="flex items-center justify-between gap-3">
+          <Link href="/" className="text-xl font-bold text-blue-400">
+            Drop Here
+          </Link>
+          <AccountButton />
+        </div>
         <section className="flex flex-col gap-3.5 rounded-[20px] border border-white/10 bg-[#0B1222] p-5" aria-labelledby="join-title">
           <h1 id="join-title" className="text-xl font-bold">
             Join a room

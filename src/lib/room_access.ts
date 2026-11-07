@@ -1,6 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createHash } from 'crypto';
+import { accountMemberHash, sessionFromHeaders } from '@/lib/auth_session';
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { ApiCode } from '@/lib/status';
 
@@ -46,7 +47,14 @@ export const isValidRoomId = (roomId: string): boolean => /^\d{6}$/.test(roomId)
 export const hashMemberKey = (key: string | null | undefined): string | null =>
   key && /^[0-9a-f]{64}$/i.test(key) ? createHash('sha256').update(key.toLowerCase()).digest('hex') : null;
 
-export const memberHashFromRequest = (headers: Headers): string | null => hashMemberKey(headers.get('x-member-key'));
+/**
+ * Info: (20261108 - Luphia)
+ * 請求者的成員身分：以 CAFECA 登入時使用帳戶身分 (換裝置仍相同)，否則使用瀏覽器金鑰
+ */
+export const memberHashFromRequest = (headers: Headers): string | null => {
+  const session = sessionFromHeaders(headers);
+  return session ? accountMemberHash(session.account) : hashMemberKey(headers.get('x-member-key'));
+};
 
 // Info: (20261106 - Luphia) 每個房間各自的上傳者代號 (公開)，無法反推金鑰，也無法跨房間比對
 export const uploaderIdFor = (roomId: string, memberHash: string | null): string | null =>

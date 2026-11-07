@@ -20,6 +20,8 @@
 # production
 /build
 /room
+# Info: (20261108 - Luphia) session 簽章金鑰 (自動產生)
+/.drophere
 
 # misc
 .DS_Store

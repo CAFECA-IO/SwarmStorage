@@ -28,6 +28,7 @@ import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
 import RoomActivity from '@/components/room_activity';
 import RoomSettingsPanel from '@/components/room_settings_panel';
+import AccountButton from '@/components/account_button';
 import type { IFileAction } from '@/components/file_actions_menu';
 import { useRoomChat } from '@/lib/use_room_chat';
 import { useRoomUploader } from '@/lib/use_room_uploader';
@@ -534,7 +535,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const uploaderLabel = (file: ILariaMetadata) => {
     if (!file.uploaderId) return 'Earlier upload';
     if (myUploaderId && file.uploaderId === myUploaderId) return 'You';
-    return 'Someone else';
+    return file.uploaderName ? `@${file.uploaderName}` : 'Someone else';
   };
 
   /**
@@ -866,10 +867,12 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         </div>
       )}
 
+      <div className="mt-auto flex flex-col gap-2">
+      <AccountButton compact />
       <button
         type="button"
         onClick={openChatDrawer}
-        className="mt-auto hidden h-10 items-center justify-center rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/5 lg:flex xl:hidden"
+        className="hidden h-10 items-center justify-center rounded-lg border border-white/10 text-xs font-semibold text-slate-300 hover:bg-white/5 lg:flex xl:hidden"
       >
         Chat · {chat.online} online
         {unreadBadge}
@@ -877,10 +880,11 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       <button
         type="button"
         onClick={onExit}
-        className="mt-auto h-10 lg:mt-0 xl:mt-auto rounded-lg border border-white/10 text-xs font-semibold tracking-wide text-slate-300 uppercase hover:bg-white/5"
+        className="h-10 rounded-lg border border-white/10 text-xs font-semibold tracking-wide text-slate-300 uppercase hover:bg-white/5"
       >
         Exit room
       </button>
+      </div>
     </>
   );
 

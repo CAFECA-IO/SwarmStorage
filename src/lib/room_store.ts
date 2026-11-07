@@ -32,7 +32,13 @@ export const RETENTION_MINUTES = [10, 60, 1440, 10080];
 
 const RESERVED_NAMES = ['_config', 'metadata', 'password.hash', 'expiration'];
 
-export type TFileMetadata = Record<string, unknown> & { filename: string; shards?: unknown; uploaderId?: string | null };
+export type TFileMetadata = Record<string, unknown> & {
+  filename: string;
+  shards?: unknown;
+  uploaderId?: string | null;
+  // Info: (20261108 - Luphia) 上傳者的 CAFECA 代稱 (以 CAFECA 登入時由伺服器填入，用戶端提供的值一律忽略)
+  uploaderName?: string | null;
+};
 
 export interface IRoomSummary {
   roomNumber: string;
@@ -297,6 +303,7 @@ export type TSaveFileResult = { ok: true; metadata: TFileMetadata } | { ok: fals
  * 儲存檔案 metadata 並記錄上傳者：
  * - 新檔案：檢查上傳權限，記錄上傳者代號
  * - 同名檔案：上傳者或建立者可覆寫；其他人只能更新分片 (修復)；新上傳則自動改名
+ * Info: (20261108 - Luphia) uploaderName 只由伺服器依登入身分填入
  */
 export async function saveFileMetadata(
   roomId: string,
@@ -304,7 +311,8 @@ export async function saveFileMetadata(
   config: IRoomConfig,
   memberHash: string | null,
   incoming: TFileMetadata,
-  uploadId: string | null
+  uploadId: string | null,
+  uploaderName: string | null = null
 ): Promise<TSaveFileResult> {
   if (!isValidFilename(incoming.filename)) return { ok: false, status: 'invalid', message: 'Invalid filename' };
   const myId = uploaderIdFor(roomId, memberHash);
@@ -321,16 +329,21 @@ export async function saveFileMetadata(
   let saved: TFileMetadata;
   if (!existing) {
     if (!canUpload(config, memberHash)) return { ok: false, status: 'forbidden', message: 'Only the room owner can upload' };
-    saved = { ...incoming, uploaderId: myId };
+    saved = { ...incoming, uploaderId: myId, uploaderName };
   } else if ((myId && existing.uploaderId === myId) || owner) {
-    saved = { ...incoming, uploaderId: existing.uploaderId ?? null };
+    const isUploader = !!myId && existing.uploaderId === myId;
+    saved = {
+      ...incoming,
+      uploaderId: existing.uploaderId ?? null,
+      uploaderName: isUploader && uploaderName ? uploaderName : (existing.uploaderName ?? null),
+    };
   } else if (!uploadId && sameExceptShards(existing, incoming)) {
     // Info: (20261106 - Luphia) 修復：任何人都可以補回遺失的分片
     saved = { ...existing, shards: incoming.shards, repairedAt: incoming.repairedAt };
   } else if (uploadId) {
     if (!canUpload(config, memberHash)) return { ok: false, status: 'forbidden', message: 'Only the room owner can upload' };
     const filename = await findFreeFilename(roomPath, incoming.filename);
-    saved = { ...incoming, filename, uploaderId: myId };
+    saved = { ...incoming, filename, uploaderId: myId, uploaderName };
   } else {
     return { ok: false, status: 'forbidden', message: 'Only the uploader or the room owner can change this file' };
   }
@@ -523,4 +536,48 @@ export async function cleanupRooms() {
       console.warn(`[Room] Cleanup failed for ${roomId}:`, err instanceof Error ? err.message : err);
     }
   }
+}
+
+/**
+ * Info: (20261108 - Luphia)
+ * 以 CAFECA 登入時，把這台瀏覽器 (匿名金鑰) 建立的房間與上傳的檔案併入帳戶：
+ * 房主身分、檔案上傳者代號 (含待刪除區) 改為帳戶身分，並補上代稱
+ */
+export async function mergeMemberIntoAccount(keyHash: string, accountHash: string, handle: string | null) {
+  if (keyHash === accountHash) return { rooms: 0, files: 0 };
+  let rooms = 0;
+  let files = 0;
+  let roomIds: string[] = [];
+  try {
+    roomIds = await fs.readdir(ROOM_BASE_DIR);
+  } catch {
+    return { rooms, files };
+  }
+  for (const roomId of roomIds) {
+    if (!isValidRoomId(roomId)) continue;
+    const roomPath = roomPathOf(roomId);
+    try {
+      const config = await readRoomConfig(roomPath);
+      if (config.ownerHash === keyHash) {
+        await writeRoomConfig(roomPath, { ...config, ownerHash: accountHash });
+        rooms += 1;
+      }
+      const oldId = uploaderIdFor(roomId, keyHash);
+      const newId = uploaderIdFor(roomId, accountHash);
+      for (const dir of [roomPath, path.join(roomPath, TRASH_DIR)]) {
+        const names = await fs.readdir(dir).catch(() => [] as string[]);
+        for (const name of names) {
+          if (!name.endsWith('.json') || name === '_config.json') continue;
+          const file = path.join(dir, name);
+          const meta = JSON.parse(await fs.readFile(file, 'utf-8')) as TFileMetadata;
+          if (meta.uploaderId !== oldId) continue;
+          await fs.writeFile(file, JSON.stringify({ ...meta, uploaderId: newId, uploaderName: handle ?? meta.uploaderName ?? null }, null, 2));
+          files += 1;
+        }
+      }
+    } catch (err) {
+      console.warn(`[Room] Merge failed for ${roomId}:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return { rooms, files };
 }

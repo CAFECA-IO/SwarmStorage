@@ -3,6 +3,7 @@ import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
 import { checkRoomAccess, memberHashFromRequest } from '@/lib/room_access';
 import { issueChatToken, onlineCount } from '@/lib/chat_hub';
+import { sessionFromHeaders } from '@/lib/auth_session';
 
 export const dynamic = 'force-dynamic';
 
@@ -21,7 +22,9 @@ export async function POST(
     const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'), memberHash);
     if (!access.ok) return jsonFail(access.code, access.message);
 
-    const { token, member, expiresAt } = issueChatToken(roomId, access.expiresAt, memberHash);
+    // Info: (20261108 - Luphia) 以 CAFECA 登入且同意提供代稱時，以代稱作為暱稱
+    const handle = sessionFromHeaders(request.headers)?.handle ?? null;
+    const { token, member, expiresAt } = issueChatToken(roomId, access.expiresAt, memberHash, handle);
     return jsonOk({ token, ...member, expiresAt, online: onlineCount(roomId) }, 'OK', {
       headers: { 'Cache-Control': 'no-store' },
     });

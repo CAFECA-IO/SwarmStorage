@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
 import { checkRoomAccess, memberHashFromRequest } from '@/lib/room_access';
+import { sessionFromHeaders } from '@/lib/auth_session';
 import { listRoomFiles, saveFileMetadata, type TFileMetadata } from '@/lib/room_store';
 
 export const dynamic = 'force-dynamic';
@@ -34,7 +35,8 @@ export async function POST(
 
     const uploadIdHeader = request.headers.get('x-upload-id');
     const uploadId = uploadIdHeader && /^[A-Za-z0-9_-]{6,64}$/.test(uploadIdHeader) ? uploadIdHeader : null;
-    const result = await saveFileMetadata(roomId, access.roomPath, access.config, memberHash, metadata, uploadId);
+    const handle = sessionFromHeaders(request.headers)?.handle ?? null;
+    const result = await saveFileMetadata(roomId, access.roomPath, access.config, memberHash, metadata, uploadId, handle);
     if (!result.ok) {
       return jsonFail(result.status === 'forbidden' ? ApiCode.FORBIDDEN : ApiCode.VALIDATION_ERROR, result.message);
     }

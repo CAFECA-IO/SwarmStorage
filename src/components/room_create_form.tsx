@@ -204,7 +204,7 @@ export default function RoomCreateForm({ variant, onCreated, onCancel }: IRoomCr
         >
           {submitting ? 'Creating…' : 'Create room'}
         </button>
-        <p className="text-center text-[11px] text-slate-500">You become the room owner on this browser.</p>
+        <p className="text-center text-[11px] text-slate-500">You become the room owner on this browser, or on your CAFECA account when signed in.</p>
       </form>
     );
   }

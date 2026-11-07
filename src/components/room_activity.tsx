@@ -291,7 +291,8 @@ export default function RoomActivity({
     (a, b) => (newFiles[b.filename] ?? b.uploadedAt ?? 0) - (newFiles[a.filename] ?? a.uploadedAt ?? 0)
   );
   const isMine = (file: ILariaMetadata) => !!myUploaderId && file.uploaderId === myUploaderId;
-  const uploaderLabel = (file: ILariaMetadata) => (isMine(file) ? 'You' : file.uploaderId ? 'Someone else' : 'Earlier upload');
+  const uploaderLabel = (file: ILariaMetadata) =>
+    isMine(file) ? 'You' : file.uploaderName ? `@${file.uploaderName}` : file.uploaderId ? 'Someone else' : 'Earlier upload';
 
   return (
     <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-8 sm:py-7">

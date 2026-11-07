@@ -100,6 +100,26 @@ npm run swarm
 npm run dev
 ```
 
+## Sign in with CAFECA
+
+Sign-in is optional: without it DropHere works anonymously with a per-browser identity. Signing in with [CAFECA](https://github.com/CAFECA-IO/CAFECA) (Passkey-based digital identity) makes rooms and uploads follow the user across devices and shows their CAFECA handle in chat, calls and the uploader field. Rooms and files created anonymously in the same browser are merged into the account on first sign-in.
+
+No registration with CAFECA or API key is needed. The user signs an EIP-712 message bound to this site's origin in the CAFECA wallet; the server verifies it itself by calling the identity contract's `isValidSignature` (ERC-1271) over the public RPC, then issues an `httpOnly` session cookie (30 days). The verifier in `src/lib/cafeca/` is copied unchanged from the CAFECA repository.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUBLIC_ORIGIN` | (unset) | Site origin(s) users sign in from, comma separated, e.g. `https://drophere.io`. **Required in production**; when unset only `localhost` can sign in |
+| `CAFECA_WALLET` | `https://cafeca.io` | CAFECA wallet origin; `off` disables sign-in |
+| `CAFECA_RPC_URL` | wallet's public RPC | Optional own Boltchain RPC for signature checks |
+| `SESSION_SECRET` | auto-generated | Session cookie signing key (≥ 32 chars). When unset a random key is created in `.drophere/session.key`; replace it to sign everyone out |
+
+| API | Description |
+|-----|-------------|
+| `POST /api/v1/auth/cafeca/nonce` | One-time nonce bound to the browser (5 minutes) |
+| `POST /api/v1/auth/cafeca/login` | Verify the wallet response and start a session |
+| `GET /api/v1/auth/session` | Current user `{ account, handle }` or `null` |
+| `DELETE /api/v1/auth/session` | Sign out |
+
 ## API Reference
 
 ### Upload File

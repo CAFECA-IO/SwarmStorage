@@ -133,14 +133,16 @@ const broadcast = (roomId: string, event: TChatEvent) => {
 export function issueChatToken(
   roomId: string,
   roomExpiresAt: number | null,
-  memberHash: string | null = null
+  memberHash: string | null = null,
+  preferredNickname: string | null = null
 ): { token: string; member: IChatMember; expiresAt: number } {
   purgeExpiredTokens();
   const expiresAt = Math.min(roomExpiresAt ?? Number.POSITIVE_INFINITY, Date.now() + TOKEN_MAX_TTL_MS);
   const taken = new Set(membersOf(roomId).map(m => m.nickname));
-  let nickname = `${pick(ADJECTIVES)} ${pick(ANIMALS)}`;
-  for (let i = 0; i < 10 && taken.has(nickname); i++) nickname = `${pick(ADJECTIVES)} ${pick(ANIMALS)}`;
-  if (taken.has(nickname)) nickname = `${nickname} ${Math.floor(Math.random() * 90) + 10}`;
+  let nickname = preferredNickname ? `@${preferredNickname}` : `${pick(ADJECTIVES)} ${pick(ANIMALS)}`;
+  // Info: (20261108 - Luphia) 代稱可以重複 (同一人開多個分頁)；隨機暱稱才避開重複
+  for (let i = 0; !preferredNickname && i < 10 && taken.has(nickname); i++) nickname = `${pick(ADJECTIVES)} ${pick(ANIMALS)}`;
+  if (!preferredNickname && taken.has(nickname)) nickname = `${nickname} ${Math.floor(Math.random() * 90) + 10}`;
 
   const token = randomBytes(24).toString('base64url');
   const member: IChatMember = { memberId: randomUUID(), nickname };

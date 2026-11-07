@@ -46,6 +46,8 @@ const tslintConfigs = [
       'eslint.config.mjs',
       'tailwind.config.ts',
       'postcss.config.mjs',
+      // Info: (20261108 - Luphia) 取自 CAFECA 的 Sign-In 驗證程式，保持與上游一致
+      'src/lib/cafeca/**',
       'jest.*.ts',
     ],
   },

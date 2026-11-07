@@ -56,6 +56,8 @@ export interface ILariaMetadata {
   repairedAt?: number;
   // Info: (20261106 - Luphia) 上傳者代號 (伺服器依瀏覽器身分產生，每個房間不同)
   uploaderId?: string | null;
+  // Info: (20261108 - Luphia) 上傳者的 CAFECA 代稱 (由伺服器依登入身分填入)
+  uploaderName?: string | null;
 }
 
 // Info: (20251028 - Luphia) Shared constants with server-side logic
