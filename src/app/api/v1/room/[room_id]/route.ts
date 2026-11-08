@@ -36,7 +36,10 @@ export async function POST(
     const uploadIdHeader = request.headers.get('x-upload-id');
     const uploadId = uploadIdHeader && /^[A-Za-z0-9_-]{6,64}$/.test(uploadIdHeader) ? uploadIdHeader : null;
     const handle = sessionFromHeaders(request.headers)?.handle ?? null;
-    const result = await saveFileMetadata(roomId, access.roomPath, access.config, memberHash, metadata, uploadId, handle);
+    // Info: (20261108 - Luphia) 資料夾上傳：同一個上傳包的檔案帶相同的 x-upload-bundle
+    const bundleHeader = request.headers.get('x-upload-bundle');
+    const bundleId = uploadId && bundleHeader && /^[A-Za-z0-9_-]{6,64}$/.test(bundleHeader) ? bundleHeader : null;
+    const result = await saveFileMetadata(roomId, access.roomPath, access.config, memberHash, metadata, uploadId, handle, bundleId);
     if (!result.ok) {
       return jsonFail(result.status === 'forbidden' ? ApiCode.FORBIDDEN : ApiCode.VALIDATION_ERROR, result.message);
     }

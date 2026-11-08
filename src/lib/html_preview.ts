@@ -73,24 +73,43 @@ const blobToDataUrl = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
+const dirOf = (filename?: string) => (filename && filename.includes('/') ? filename.slice(0, filename.lastIndexOf('/')) : '');
+
+// Info: (20261108 - Luphia) 依所在資料夾解析相對路徑 (支援 ./ 與 ../，不可超出房間根目錄)
+const resolveRelative = (baseDir: string, ref: string): string | null => {
+  const parts = baseDir ? baseDir.split('/') : [];
+  for (const seg of ref.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') {
+      if (parts.length === 0) return null;
+      parts.pop();
+    } else parts.push(seg);
+  }
+  return parts.length ? parts.join('/') : null;
+};
+
 /**
  * Info: (20261105 - Luphia)
- * 判斷引用是否指向房間內檔案：只接受相對路徑，取最後一段檔名比對
+ * 判斷引用是否指向房間內檔案：只接受相對路徑
+ * Info: (20261108 - Luphia) 依引用文件所在的資料夾解析 (資料夾上傳的網站可完整預覽)；
+ * 房間根目錄的文件仍可只以檔名比對 (相容沒有資料夾的舊房間)
  */
-const matchRoomFile = (ref: string | null, roomFiles: Set<string>): string | null => {
+const matchRoomFile = (ref: string | null, roomFiles: Set<string>, baseDir = ''): string | null => {
   if (!ref) return null;
   const trimmed = ref.trim();
   if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
     return null;
   }
-  const pathPart = trimmed.split(/[?#]/)[0];
-  let basename = pathPart.split('/').pop() || '';
+  let pathPart = trimmed.split(/[?#]/)[0];
   try {
-    basename = decodeURIComponent(basename);
+    pathPart = decodeURIComponent(pathPart);
   } catch {
     // Info: (20261105 - Luphia) 保留原字串
   }
-  return roomFiles.has(basename) ? basename : null;
+  const resolved = resolveRelative(baseDir, pathPart);
+  if (resolved && roomFiles.has(resolved)) return resolved;
+  const basename = pathPart.split('/').pop() || '';
+  return !baseDir && roomFiles.has(basename) ? basename : null;
 };
 
 const buildCsp = (options: IHtmlPreviewOptions, nonce: string): string => {
@@ -221,6 +240,7 @@ export async function prepareHtmlPreview(
   const nonce = createNonce();
   const roomFiles = new Set(resolver?.filenames.filter(name => name !== currentFilename) ?? []);
   const inlinedFiles = new Set<string>();
+  const baseDir = dirOf(currentFilename);
 
   // Info: (20261105 - Luphia) 移除會改變導覽行為或覆寫安全設定的標籤
   doc.querySelectorAll('meta[http-equiv], base').forEach(el => el.remove());
@@ -256,6 +276,24 @@ export async function prepareHtmlPreview(
   // Info: (20261105 - Luphia) 解析房間內檔案引用
   if (options.resolveRoomFiles && resolver && roomFiles.size > 0) {
     const tasks: Promise<void>[] = [];
+    // Info: (20261108 - Luphia) CSS 中的 url() 依 CSS 檔所在資料夾解析並內嵌 (字型、背景圖)
+    const inlineCssUrls = async (css: string, cssDir: string): Promise<string> => {
+      const refs = [...css.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi)];
+      const replacements = new Map<string, string>();
+      await Promise.all(
+        refs.map(async match => {
+          const filename = matchRoomFile(match[2], roomFiles, cssDir);
+          if (!filename || replacements.has(match[0]) || resolver.sizeOf(filename) > MAX_INLINE_ASSET_BYTES) return;
+          try {
+            replacements.set(match[0], `url("${await blobToDataUrl(await resolver.load(filename))}")`);
+            inlinedFiles.add(filename);
+          } catch {
+            // Info: (20261108 - Luphia) 保留原本的 url()
+          }
+        })
+      );
+      return css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/gi, whole => replacements.get(whole) ?? whole);
+    };
     const inline = async (filename: string, apply: (blob: Blob) => Promise<void>) => {
       if (resolver.sizeOf(filename) > MAX_INLINE_ASSET_BYTES) return;
       try {
@@ -267,23 +305,23 @@ export async function prepareHtmlPreview(
     };
 
     doc.querySelectorAll<HTMLElement>('img[src], source[src], video[src], audio[src], input[type="image"][src]').forEach(el => {
-      const filename = matchRoomFile(el.getAttribute('src'), roomFiles);
+      const filename = matchRoomFile(el.getAttribute('src'), roomFiles, baseDir);
       if (filename) {
         el.removeAttribute('srcset');
         tasks.push(inline(filename, async blob => el.setAttribute('src', await blobToDataUrl(blob))));
       }
     });
     doc.querySelectorAll<HTMLElement>('video[poster]').forEach(el => {
-      const filename = matchRoomFile(el.getAttribute('poster'), roomFiles);
+      const filename = matchRoomFile(el.getAttribute('poster'), roomFiles, baseDir);
       if (filename) tasks.push(inline(filename, async blob => el.setAttribute('poster', await blobToDataUrl(blob))));
     });
     doc.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet"][href]').forEach(el => {
-      const filename = matchRoomFile(el.getAttribute('href'), roomFiles);
+      const filename = matchRoomFile(el.getAttribute('href'), roomFiles, baseDir);
       if (filename) {
         tasks.push(
           inline(filename, async blob => {
             const style = doc.createElement('style');
-            style.textContent = await blob.text();
+            style.textContent = await inlineCssUrls(await blob.text(), dirOf(filename));
             el.replaceWith(style);
           })
         );
@@ -291,7 +329,7 @@ export async function prepareHtmlPreview(
     });
     if (options.allowScripts) {
       doc.querySelectorAll<HTMLScriptElement>('script[src]').forEach(el => {
-        const filename = matchRoomFile(el.getAttribute('src'), roomFiles);
+        const filename = matchRoomFile(el.getAttribute('src'), roomFiles, baseDir);
         if (filename) {
           tasks.push(
             inline(filename, async blob => {
@@ -302,8 +340,13 @@ export async function prepareHtmlPreview(
         }
       });
     }
+    // Info: (20261108 - Luphia) 內嵌 <style> 中的 url() (相對於 HTML 文件)
+    doc.querySelectorAll<HTMLStyleElement>('style').forEach(el => {
+      const css = el.textContent || '';
+      if (/url\(/i.test(css)) tasks.push(inlineCssUrls(css, baseDir).then(text => void (el.textContent = text)));
+    });
     doc.querySelectorAll<HTMLAnchorElement>('a[href]').forEach(el => {
-      const filename = matchRoomFile(el.getAttribute('href'), roomFiles);
+      const filename = matchRoomFile(el.getAttribute('href'), roomFiles, baseDir);
       if (filename) {
         el.setAttribute('data-dh-open', filename);
         el.setAttribute('href', '#');

@@ -71,13 +71,20 @@ export interface IRoomSettings {
   serverTime: number;
 }
 
-export const isValidFilename = (filename: unknown): filename is string =>
-  typeof filename === 'string' &&
-  filename.length > 0 &&
-  filename.length <= 255 &&
-  !/[\\/\0]/.test(filename) &&
-  !filename.startsWith('.') &&
-  !RESERVED_NAMES.includes(filename);
+// Info: (20261108 - Luphia) 資料夾上傳：filename 為以 / 分隔的相對路徑 (例：experiment/raw/run-001.csv)
+export const MAX_PATH_LENGTH = 1024;
+export const MAX_FOLDER_DEPTH = 16;
+const MAX_SEGMENT_LENGTH = 255;
+
+export const isValidFilename = (filename: unknown): filename is string => {
+  if (typeof filename !== 'string' || filename.length === 0 || filename.length > MAX_PATH_LENGTH) return false;
+  // Info: (20261108 - Luphia) 不允許反斜線與控制字元；開頭不可為 . (避免 .trash 等內部目錄)
+  if (/[\\\u0000-\u001f\u007f]/.test(filename) || filename.startsWith('.')) return false;
+  const segments = filename.split('/');
+  if (segments.length > MAX_FOLDER_DEPTH + 1) return false;
+  if (segments.some(seg => !seg || seg === '.' || seg === '..' || seg.length > MAX_SEGMENT_LENGTH || seg !== seg.trim())) return false;
+  return segments.length > 1 || !RESERVED_NAMES.includes(filename);
+};
 
 export const roomDisplayName = (roomId: string, config: IRoomConfig) => config.name?.trim() || `Room ${roomId}`;
 
@@ -85,8 +92,57 @@ export const sanitizeRoomName = (name: unknown): string =>
   typeof name === 'string' ? name.replace(/\s+/g, ' ').trim().slice(0, MAX_ROOM_NAME) : '';
 
 const roomPathOf = (roomId: string) => path.join(ROOM_BASE_DIR, roomId);
-const metadataPathOf = (roomPath: string, filename: string) => path.join(roomPath, `${filename}.json`);
-const trashPathOf = (roomPath: string, filename: string) => path.join(roomPath, TRASH_DIR, `${filename}.json`);
+/**
+ * Info: (20261108 - Luphia)
+ * metadata 依資料夾結構存放：資料夾 a/b 存成 a.dir/b.dir/ (加上 .dir 後綴，避免與同名檔案的 metadata 衝突)
+ */
+const DIR_SUFFIX = '.dir';
+const storagePathOf = (base: string, filename: string) => {
+  const segments = filename.split('/');
+  const leaf = segments.pop() as string;
+  return path.join(base, ...segments.map(seg => `${seg}${DIR_SUFFIX}`), `${leaf}.json`);
+};
+const metadataPathOf = (roomPath: string, filename: string) => storagePathOf(roomPath, filename);
+const trashPathOf = (roomPath: string, filename: string) => storagePathOf(path.join(roomPath, TRASH_DIR), filename);
+const ROOT_SKIP = ['_config.json', 'metadata.json', 'expiration.json'];
+
+// Info: (20261108 - Luphia) 列出某個目錄下 (含子資料夾) 的所有 metadata 檔案路徑
+async function walkMetadataFiles(base: string, root = true): Promise<string[]> {
+  let entries: import('fs').Dirent[] = [];
+  try {
+    entries = await fs.readdir(base, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const files: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(base, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name.endsWith(DIR_SUFFIX)) files.push(...(await walkMetadataFiles(full, false)));
+    } else if (entry.isFile() && entry.name.endsWith('.json') && !(root && ROOT_SKIP.includes(entry.name))) {
+      files.push(full);
+    }
+  }
+  return files;
+}
+
+// Info: (20261108 - Luphia) 刪除檔案後移除變空的資料夾 (直到 base 為止)
+async function pruneEmptyDirs(base: string, file: string) {
+  let dir = path.dirname(file);
+  while (dir.startsWith(base + path.sep) && dir !== base) {
+    try {
+      await fs.rmdir(dir);
+    } catch {
+      return;
+    }
+    dir = path.dirname(dir);
+  }
+}
+
+async function writeMetadataFile(target: string, data: unknown) {
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  await fs.writeFile(target, JSON.stringify(data, null, 2));
+}
 
 async function exists(target: string): Promise<boolean> {
   try {
@@ -98,13 +154,10 @@ async function exists(target: string): Promise<boolean> {
 }
 
 export async function listRoomFiles(roomPath: string): Promise<TFileMetadata[]> {
-  const entries = await fs.readdir(roomPath, { withFileTypes: true });
   const files: TFileMetadata[] = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
-    if (['_config.json', 'metadata.json', 'expiration.json'].includes(entry.name)) continue;
+  for (const file of await walkMetadataFiles(roomPath)) {
     try {
-      const metadata = JSON.parse(await fs.readFile(path.join(roomPath, entry.name), 'utf-8'));
+      const metadata = JSON.parse(await fs.readFile(file, 'utf-8'));
       if (metadata && typeof metadata.filename === 'string') files.push(metadata);
     } catch {
       // Info: (20261106 - Luphia) 略過格式錯誤的檔案
@@ -277,9 +330,13 @@ export async function updateRoomSettings(
 }
 
 async function findFreeFilename(roomPath: string, filename: string): Promise<string> {
-  const dot = filename.lastIndexOf('.');
-  const base = dot > 0 ? filename.slice(0, dot) : filename;
-  const ext = dot > 0 ? filename.slice(dot) : '';
+  // Info: (20261108 - Luphia) 只改最後一段的檔名，資料夾路徑不變
+  const slash = filename.lastIndexOf('/');
+  const dirPart = slash >= 0 ? filename.slice(0, slash + 1) : '';
+  const leaf = filename.slice(slash + 1);
+  const dot = leaf.lastIndexOf('.');
+  const base = dirPart + (dot > 0 ? leaf.slice(0, dot) : leaf);
+  const ext = dot > 0 ? leaf.slice(dot) : '';
   for (let n = 1; n < 1000; n++) {
     const candidate = `${base} (${n})${ext}`;
     if (!(await exists(metadataPathOf(roomPath, candidate))) && !(await exists(trashPathOf(roomPath, candidate)))) return candidate;
@@ -312,7 +369,8 @@ export async function saveFileMetadata(
   memberHash: string | null,
   incoming: TFileMetadata,
   uploadId: string | null,
-  uploaderName: string | null = null
+  uploaderName: string | null = null,
+  bundleId: string | null = null
 ): Promise<TSaveFileResult> {
   if (!isValidFilename(incoming.filename)) return { ok: false, status: 'invalid', message: 'Invalid filename' };
   const myId = uploaderIdFor(roomId, memberHash);
@@ -348,8 +406,8 @@ export async function saveFileMetadata(
     return { ok: false, status: 'forbidden', message: 'Only the uploader or the room owner can change this file' };
   }
 
-  await fs.writeFile(metadataPathOf(roomPath, saved.filename), JSON.stringify(saved, null, 2));
-  announceFile(roomId, saved, uploadId);
+  await writeMetadataFile(metadataPathOf(roomPath, saved.filename), saved);
+  announceFile(roomId, saved, uploadId, bundleId);
   return { ok: true, metadata: saved };
 }
 
@@ -378,9 +436,9 @@ export async function deleteFile(
   if (!allowed) return { ok: false, status: 'forbidden', message: 'Only the uploader or the room owner can delete this file' };
 
   const undoUntil = Date.now() + DELETE_UNDO_MS;
-  await fs.mkdir(path.join(roomPath, TRASH_DIR), { recursive: true });
-  await fs.writeFile(trashPathOf(roomPath, filename), JSON.stringify({ ...metadata, deletedAt: Date.now(), undoUntil }, null, 2));
+  await writeMetadataFile(trashPathOf(roomPath, filename), { ...metadata, deletedAt: Date.now(), undoUntil });
   await fs.rm(source, { force: true });
+  await pruneEmptyDirs(roomPath, source);
   announceFileRemoved(roomId, filename);
 
   const key = `${roomId}/${filename}`;
@@ -421,8 +479,9 @@ export async function restoreFile(
   const { deletedAt, undoUntil, ...restored } = metadata;
   void deletedAt;
   void undoUntil;
-  await fs.writeFile(metadataPathOf(roomPath, filename), JSON.stringify(restored, null, 2));
+  await writeMetadataFile(metadataPathOf(roomPath, filename), restored);
   await fs.rm(trashPath, { force: true });
+  await pruneEmptyDirs(path.join(roomPath, TRASH_DIR), trashPath);
   announceFile(roomId, restored, null);
   return { ok: true, metadata: restored };
 }
@@ -440,6 +499,7 @@ async function finalizeDelete(roomPath: string, filename: string) {
     return;
   }
   await fs.rm(trashPath, { force: true });
+  await pruneEmptyDirs(path.join(roomPath, TRASH_DIR), trashPath);
   const shards = Array.isArray(metadata.shards) ? (metadata.shards as unknown[]).filter((c): c is string => typeof c === 'string') : [];
   if (shards.length === 0) return;
 
@@ -464,22 +524,13 @@ async function collectReferencedCids(): Promise<Set<string>> {
   for (const roomId of rooms) {
     if (!isValidRoomId(roomId)) continue;
     const roomPath = roomPathOf(roomId);
-    const dirs = [roomPath, path.join(roomPath, TRASH_DIR)];
-    for (const dir of dirs) {
-      let names: string[] = [];
+    const files = [...(await walkMetadataFiles(roomPath)), ...(await walkMetadataFiles(path.join(roomPath, TRASH_DIR), false))];
+    for (const file of files) {
       try {
-        names = await fs.readdir(dir);
+        const metadata = JSON.parse(await fs.readFile(file, 'utf-8'));
+        if (Array.isArray(metadata.shards)) metadata.shards.forEach((c: unknown) => typeof c === 'string' && cids.add(c));
       } catch {
-        continue;
-      }
-      for (const name of names) {
-        if (!name.endsWith('.json') || name === '_config.json') continue;
-        try {
-          const metadata = JSON.parse(await fs.readFile(path.join(dir, name), 'utf-8'));
-          if (Array.isArray(metadata.shards)) metadata.shards.forEach((c: unknown) => typeof c === 'string' && cids.add(c));
-        } catch {
-          // Info: (20261106 - Luphia) ignore
-        }
+        // Info: (20261106 - Luphia) ignore
       }
     }
   }
@@ -515,12 +566,11 @@ export async function cleanupRooms() {
         continue;
       }
       // Info: (20261106 - Luphia) 伺服器重啟後遺留的待刪除檔案
-      const trashDir = path.join(roomPath, TRASH_DIR);
-      for (const name of await fs.readdir(trashDir).catch(() => [] as string[])) {
+      for (const file of await walkMetadataFiles(path.join(roomPath, TRASH_DIR), false)) {
         try {
-          const meta = JSON.parse(await fs.readFile(path.join(trashDir, name), 'utf-8'));
-          if (typeof meta.undoUntil !== 'number' || now > meta.undoUntil + DELETE_UNDO_MS) {
-            await finalizeDelete(roomPath, name.replace(/\.json$/, ''));
+          const meta = JSON.parse(await fs.readFile(file, 'utf-8'));
+          if (isValidFilename(meta.filename) && (typeof meta.undoUntil !== 'number' || now > meta.undoUntil + DELETE_UNDO_MS)) {
+            await finalizeDelete(roomPath, meta.filename);
           }
         } catch {
           // Info: (20261106 - Luphia) ignore
@@ -564,16 +614,12 @@ export async function mergeMemberIntoAccount(keyHash: string, accountHash: strin
       }
       const oldId = uploaderIdFor(roomId, keyHash);
       const newId = uploaderIdFor(roomId, accountHash);
-      for (const dir of [roomPath, path.join(roomPath, TRASH_DIR)]) {
-        const names = await fs.readdir(dir).catch(() => [] as string[]);
-        for (const name of names) {
-          if (!name.endsWith('.json') || name === '_config.json') continue;
-          const file = path.join(dir, name);
-          const meta = JSON.parse(await fs.readFile(file, 'utf-8')) as TFileMetadata;
-          if (meta.uploaderId !== oldId) continue;
-          await fs.writeFile(file, JSON.stringify({ ...meta, uploaderId: newId, uploaderName: handle ?? meta.uploaderName ?? null }, null, 2));
-          files += 1;
-        }
+      const metadataFiles = [...(await walkMetadataFiles(roomPath)), ...(await walkMetadataFiles(path.join(roomPath, TRASH_DIR), false))];
+      for (const file of metadataFiles) {
+        const meta = JSON.parse(await fs.readFile(file, 'utf-8')) as TFileMetadata;
+        if (meta.uploaderId !== oldId) continue;
+        await fs.writeFile(file, JSON.stringify({ ...meta, uploaderId: newId, uploaderName: handle ?? meta.uploaderName ?? null }, null, 2));
+        files += 1;
       }
     } catch (err) {
       console.warn(`[Room] Merge failed for ${roomId}:`, err instanceof Error ? err.message : err);

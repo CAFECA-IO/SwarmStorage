@@ -11,6 +11,8 @@ export interface IUploadCallbacks {
 export interface IUploadOptions {
   // Info: (20261105 - Luphia) 是否允許接收者下載 (預設允許)
   allowDownload?: boolean;
+  // Info: (20261108 - Luphia) 儲存於房間的檔名 (資料夾上傳時為相對路徑)；未指定時使用 file.name
+  filename?: string;
 }
 
 export interface IMissingShard {
@@ -206,7 +208,7 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
     }
 
     const metadata: ILariaMetadata = {
-      filename: file.name,
+      filename: options.filename || file.name,
       originalFileSize: file.size,
       mimeType: file.type,
       shards: shardCids,

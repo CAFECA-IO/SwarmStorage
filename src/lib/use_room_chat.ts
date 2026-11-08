@@ -40,7 +40,11 @@ export interface IUploadReportInput {
   mimeType: string;
   shardsDone: number;
   shardsTotal: number;
-  status: 'uploading' | 'failed' | 'cancelled';
+  status: 'uploading' | 'failed' | 'cancelled' | 'complete';
+  kind?: 'file' | 'folder';
+  filesDone?: number;
+  filesTotal?: number;
+  parts?: { name: string; done: number; total: number }[];
 }
 
 interface IUseRoomChatOptions {
@@ -52,12 +56,14 @@ interface IUseRoomChatOptions {
   // Info: (20261106 - Luphia) 檔案被刪除、房間設定變更
   onFileRemoved?: (filename: string) => void;
   onRoomSettings?: (settings: Record<string, unknown>) => void;
+  // Info: (20261108 - Luphia) 資料夾上傳包完成
+  onUploadComplete?: (upload: IUploadStatus) => void;
 }
 
 // Info: (20261105 - Luphia) 畫面上最多保留的訊息數 (僅限本機記憶體)
 const MAX_ENTRIES = 300;
 
-export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, onRoomSettings }: IUseRoomChatOptions): IRoomChat {
+export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, onRoomSettings, onUploadComplete }: IUseRoomChatOptions): IRoomChat {
   const [status, setStatus] = useState<TChatStatus>('idle');
   const [me, setMe] = useState<IChatMember | null>(null);
   const [online, setOnline] = useState(0);
@@ -69,11 +75,13 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
   const onFileRef = useRef(onFile);
   const onFileRemovedRef = useRef(onFileRemoved);
   const onRoomSettingsRef = useRef(onRoomSettings);
+  const onUploadCompleteRef = useRef(onUploadComplete);
   useEffect(() => {
     onFileRef.current = onFile;
     onFileRemovedRef.current = onFileRemoved;
     onRoomSettingsRef.current = onRoomSettings;
-  }, [onFile, onFileRemoved, onRoomSettings]);
+    onUploadCompleteRef.current = onUploadComplete;
+  }, [onFile, onFileRemoved, onRoomSettings, onUploadComplete]);
 
   const tokenRef = useRef<string | null>(null);
   const passwordRef = useRef(password);
@@ -120,21 +128,33 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
         const { upload } = event;
         const previous = knownUploads.get(upload.uploadId);
         const who = upload.uploader.memberId === myId ? 'You' : upload.uploader.nickname;
-        if (!previous) system(`${who} started uploading ${upload.filename}`);
+        if (!previous) {
+          system(
+            upload.kind === 'folder'
+              ? `${who} started uploading the folder ${upload.filename} (${upload.filesTotal} files)`
+              : `${who} started uploading ${upload.filename}`
+          );
+        }
         else if (previous.status === 'uploading' && upload.status === 'interrupted') system(`Upload of ${upload.filename} was interrupted`);
         knownUploads.set(upload.uploadId, upload);
         setUploads(prev => ({ ...prev, [upload.uploadId]: upload }));
       } else if (event.type === 'upload-removed') {
         const previous = knownUploads.get(event.uploadId);
         knownUploads.delete(event.uploadId);
-        if (previous) system(`Upload of ${previous.filename} ${event.reason === 'failed' ? 'failed' : 'stopped'}`);
+        if (previous && event.reason === 'complete') {
+          system(`${previous.filename} is ready (${previous.filesTotal ?? 0} files)`);
+          onUploadCompleteRef.current?.(previous);
+        } else if (previous) {
+          system(`Upload of ${previous.filename} ${event.reason === 'failed' ? 'failed' : 'stopped'}`);
+        }
         setUploads(prev => {
           const next = { ...prev };
           delete next[event.uploadId];
           return next;
         });
       } else if (event.type === 'file') {
-        if (event.uploadId) {
+        // Info: (20261108 - Luphia) 資料夾中的檔案：上傳包完成時才結束上傳狀態並通知
+        if (event.uploadId && !event.bundleId) {
           knownUploads.delete(event.uploadId);
           const id = event.uploadId;
           setUploads(prev => {

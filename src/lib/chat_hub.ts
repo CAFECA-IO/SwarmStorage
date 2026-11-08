@@ -41,13 +41,25 @@ export interface IUploadStatus {
   startedAt: number;
   updatedAt: number;
   status: 'uploading' | 'interrupted';
+  // Info: (20261108 - Luphia) 資料夾上傳 (一個上傳包)：filename 為資料夾名稱，進度以 shardsDone / shardsTotal (千分比) 表示
+  kind?: 'file' | 'folder';
+  filesDone?: number;
+  filesTotal?: number;
+  // Info: (20261108 - Luphia) 資料夾內第一層項目的進度 (最多 12 項)
+  parts?: IUploadPart[];
+}
+
+export interface IUploadPart {
+  name: string;
+  done: number;
+  total: number;
 }
 
 export type TChatEvent =
   | { type: 'ready'; me: IChatMember; online: number; members: IChatMember[]; uploads: IUploadStatus[] }
   | { type: 'upload'; upload: IUploadStatus }
-  | { type: 'upload-removed'; uploadId: string; reason: 'failed' | 'cancelled' | 'interrupted' }
-  | { type: 'file'; metadata: Record<string, unknown>; uploadId: string | null }
+  | { type: 'upload-removed'; uploadId: string; reason: 'failed' | 'cancelled' | 'interrupted' | 'complete' }
+  | { type: 'file'; metadata: Record<string, unknown>; uploadId: string | null; bundleId?: string | null }
   | { type: 'file-removed'; filename: string }
   | { type: 'room-settings'; settings: Record<string, unknown> }
   | { type: 'call'; participants: number }
@@ -274,7 +286,7 @@ function markMemberUploadsInterrupted(roomId: string, memberId: string) {
   });
 }
 
-function removeUpload(roomId: string, uploadId: string, reason: 'failed' | 'cancelled' | 'interrupted', notify = true) {
+function removeUpload(roomId: string, uploadId: string, reason: 'failed' | 'cancelled' | 'interrupted' | 'complete', notify = true) {
   const room = state.uploads.get(roomId);
   if (!room?.delete(uploadId)) return;
   if (room.size === 0) state.uploads.delete(roomId);
@@ -310,7 +322,34 @@ export interface IUploadReport {
   shardsDone?: unknown;
   shardsTotal?: unknown;
   status?: unknown;
+  kind?: unknown;
+  filesDone?: unknown;
+  filesTotal?: unknown;
+  parts?: unknown;
 }
+
+const MAX_UPLOAD_PARTS = 12;
+const MAX_FOLDER_FILES = 5000;
+
+// Info: (20261108 - Luphia) 資料夾上傳的附加欄位：數量與第一層項目進度
+const folderFields = (report: IUploadReport): Pick<IUploadStatus, 'filesDone' | 'filesTotal' | 'parts'> | null => {
+  const filesTotal = Number(report.filesTotal);
+  const filesDone = Number(report.filesDone);
+  if (!Number.isInteger(filesTotal) || filesTotal < 1 || filesTotal > MAX_FOLDER_FILES) return null;
+  if (!Number.isInteger(filesDone) || filesDone < 0 || filesDone > filesTotal) return null;
+  const parts: IUploadPart[] = [];
+  if (Array.isArray(report.parts)) {
+    for (const raw of report.parts.slice(0, MAX_UPLOAD_PARTS)) {
+      const part = raw as { name?: unknown; done?: unknown; total?: unknown };
+      const total = Number(part?.total);
+      const done = Number(part?.done);
+      if (typeof part?.name !== 'string' || !part.name || part.name.length > MAX_FILENAME_LENGTH) continue;
+      if (!Number.isInteger(total) || total < 1 || !Number.isInteger(done) || done < 0 || done > total) continue;
+      parts.push({ name: part.name, done, total });
+    }
+  }
+  return { filesDone, filesTotal, parts };
+};
 
 export type TUploadReportResult = { ok: true } | { ok: false; reason: 'token' | 'invalid' | 'limit' | 'forbidden' };
 
@@ -330,7 +369,7 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
   const existing = room?.get(uploadId);
   if (existing && existing.uploader.memberId !== entry.memberId) return { ok: false, reason: 'forbidden' };
 
-  if (report.status === 'failed' || report.status === 'cancelled') {
+  if (report.status === 'failed' || report.status === 'cancelled' || report.status === 'complete') {
     if (existing) removeUpload(roomId, uploadId, report.status);
     return { ok: true };
   }
@@ -354,10 +393,18 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
     return { ok: false, reason: 'invalid' };
   }
 
+  const isFolder = report.kind === 'folder';
+  const folder = isFolder ? folderFields(report) : null;
+  if (isFolder && !folder) return { ok: false, reason: 'invalid' };
+
   const now = Date.now();
   if (existing) {
     // Info: (20261105 - Luphia) 進度只增不減
     existing.shardsDone = Math.max(existing.shardsDone, shardsDone);
+    if (folder && existing.kind === 'folder') {
+      existing.filesDone = Math.max(existing.filesDone ?? 0, folder.filesDone ?? 0);
+      existing.parts = folder.parts;
+    }
     existing.updatedAt = now;
     existing.status = 'uploading';
     broadcast(roomId, { type: 'upload', upload: existing });
@@ -381,6 +428,7 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
     startedAt: now,
     updatedAt: now,
     status: 'uploading',
+    ...(folder ? { kind: 'folder' as const, ...folder } : {}),
   };
   room.set(uploadId, upload);
   broadcast(roomId, { type: 'upload', upload });
@@ -391,9 +439,10 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
  * Info: (20261105 - Luphia)
  * 房間新增或更新檔案 metadata 時通知在線成員；若對應某個上傳則一併結束該上傳
  */
-export function announceFile(roomId: string, metadata: Record<string, unknown>, uploadId: string | null) {
+export function announceFile(roomId: string, metadata: Record<string, unknown>, uploadId: string | null, bundleId: string | null = null) {
   if (uploadId) removeUpload(roomId, uploadId, 'cancelled', false);
-  broadcast(roomId, { type: 'file', metadata, uploadId });
+  // Info: (20261108 - Luphia) 資料夾中的檔案：上傳包的狀態由上傳者回報 complete 時才移除
+  broadcast(roomId, { type: 'file', metadata, uploadId, bundleId });
 }
 
 /**

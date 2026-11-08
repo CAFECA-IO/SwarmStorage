@@ -10,7 +10,8 @@ export const dynamic = 'force-dynamic';
 /**
  * Info: (20261105 - Luphia) 處理 POST /api/v1/room/[room_id]/uploads
  * 上傳者回報上傳進度 (Authorization: Bearer <chat token>)
- * body: { uploadId, filename, size, mimeType, shardsDone, shardsTotal, status: 'uploading' | 'failed' | 'cancelled' }
+ * body: { uploadId, filename, size, mimeType, shardsDone, shardsTotal, status: 'uploading' | 'failed' | 'cancelled' | 'complete' }
+ * 資料夾上傳另帶 kind: 'folder'、filesDone、filesTotal、parts: [{ name, done, total }]
  * 狀態只保存在記憶體，並即時推送給房間內的其他成員
  */
 export async function POST(

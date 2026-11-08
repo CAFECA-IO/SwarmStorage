@@ -32,6 +32,10 @@ import AccountButton from '@/components/account_button';
 import type { IFileAction } from '@/components/file_actions_menu';
 import { useRoomChat } from '@/lib/use_room_chat';
 import { useRoomUploader } from '@/lib/use_room_uploader';
+import { collectDropped, collectPicked, type ICollectedFiles, type IPathedFile } from '@/lib/folder_entries';
+import { baseName, filesUnder, freeTopName, listChildren, topLevelNames } from '@/lib/folder_tree';
+import { chooseZipTarget, downloadFolderZip, zipNameOf } from '@/lib/folder_zip';
+import { FolderIcon } from '@/components/folder_browser';
 import { addRecentRoom, memberHeaders } from '@/lib/member';
 import type { IRoomSettings } from '@/lib/room_store';
 import type { IHtmlViewerHandle } from '@/components/html_viewer';
@@ -128,6 +132,17 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const [settingsError, setSettingsError] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
+  // Info: (20261108 - Luphia) 資料夾 (C 方案)：瀏覽中的資料夾、待確認的資料夾上傳、打包下載進度
+  const [browse, setBrowse] = useState<{ path: string; selected: string | null } | null>(null);
+  const [pendingDrop, setPendingDrop] = useState<{
+    entries: IPathedFile[];
+    folders: { name: string; original: string; count: number; size: number }[];
+    looseCount: number;
+    skipped: number;
+    truncated: boolean;
+  } | null>(null);
+  const [zipJob, setZipJob] = useState<{ name: string; done: number; total: number } | null>(null);
   const [now, setNow] = useState(0);
   const [repairs, setRepairs] = useState<Record<string, IRepairState>>({});
   // Info: (20261105 - Luphia) 聊天：通過密碼驗證後才連線
@@ -242,6 +257,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     onFile: handleFileEvent,
     onFileRemoved: handleFileRemoved,
     onRoomSettings: handleRoomSettings,
+    onUploadComplete: upload => handleBundleComplete(upload.uploadId, upload.filename, upload.filesTotal ?? 0),
   });
 
   // Info: (20261106 - Luphia) 視訊會議 (共用 LiveKit)；callOpen 表示主畫面顯示通話
@@ -266,6 +282,29 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     chat,
     onError: handleUploadError,
   });
+
+  // Info: (20261108 - Luphia) 資料夾上傳包完成：通知有按「Notify me」的人
+  function handleBundleComplete(uploadId: string, folder: string, count: number) {
+    if (!watchingRef.current.has(uploadId)) return;
+    setWatching(prev => {
+      const next = new Set(prev);
+      next.delete(uploadId);
+      return next;
+    });
+    pushToast({
+      message: `${folder} is ready (${count} files)`,
+      tone: 'success',
+      actionLabel: 'Browse',
+      onAction: () => {
+        setActiveName(null);
+        setCallOpen(false);
+        setBrowse({ path: folder, selected: null });
+      },
+    });
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted' && document.hidden) {
+      new Notification(`${folder} is ready`, { body: `Room #${roomId} · ${count} files` });
+    }
+  }
 
   const toggleWatch = (uploadId: string) => {
     const adding = !watching.has(uploadId);
@@ -454,12 +493,12 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     if (!meta || !isDownloadAllowed(meta)) return;
     const ready = loads[name];
     if (ready?.status === 'ready' && ready.blob) {
-      saveBlob(ready.blob, name);
+      saveBlob(ready.blob, baseName(name));
       return;
     }
     setDownloading(prev => ({ ...prev, [name]: true }));
     try {
-      saveBlob(await loadBlob(name), name);
+      saveBlob(await loadBlob(name), baseName(name));
     } catch {
       // Info: (20261105 - Luphia) 錯誤已寫入 loads 狀態並顯示於預覽區
     } finally {
@@ -565,6 +604,83 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     }
   };
 
+  // Info: (20261108 - Luphia) 刪除整個資料夾：逐一刪除 (10 秒內可一次復原)
+  const handleDeleteFolder = async (path: string) => {
+    const inside = filesUnder(filesRef.current, path);
+    const deleted: string[] = [];
+    for (const file of inside) {
+      try {
+        const res = await fetch(`/api/v1/room/${roomId}/files/${encodeURIComponent(file.filename)}`, {
+          method: 'DELETE',
+          headers: memberHeaders({}, chatPassword),
+        });
+        const data = await res.json();
+        if (data.code === ApiCode.OK) {
+          deleted.push(file.filename);
+          handleFileRemoved(file.filename);
+        }
+      } catch {
+        // Info: (20261108 - Luphia) 個別失敗：最後一併提示
+      }
+    }
+    if (browse && (browse.path === path || browse.path.startsWith(`${path}/`))) setBrowse(null);
+    const failed = inside.length - deleted.length;
+    pushToast(
+      {
+        message: failed ? `${path}: deleted ${deleted.length}, ${failed} could not be deleted` : `${path} was deleted (${deleted.length} files)`,
+        tone: failed ? 'error' : 'info',
+        actionLabel: deleted.length ? 'Undo' : undefined,
+        onAction: deleted.length
+          ? async () => {
+              let restored = 0;
+              for (const name of deleted) {
+                try {
+                  const res = await fetch(`/api/v1/room/${roomId}/files/${encodeURIComponent(name)}/restore`, {
+                    method: 'POST',
+                    headers: memberHeaders({}, chatPassword),
+                  });
+                  if ((await res.json()).code === ApiCode.OK) restored++;
+                } catch {
+                  // Info: (20261108 - Luphia) ignore
+                }
+              }
+              pushToast({ message: `${path}: restored ${restored} of ${deleted.length} files`, tone: restored === deleted.length ? 'success' : 'error' }, 4000);
+            }
+          : undefined,
+      },
+      DELETE_UNDO_MS
+    );
+  };
+
+  /**
+   * Info: (20261108 - Luphia)
+   * 下載整個資料夾 (.zip)：先開啟儲存對話框 (必須在點擊事件中)，再逐一取回檔案打包
+   */
+  const handleDownloadFolder = async (path: string) => {
+    if (zipJob) {
+      pushToast({ message: 'Another folder is being zipped. Try again when it finishes.', tone: 'error' }, 4000);
+      return;
+    }
+    const zipName = zipNameOf(path);
+    const target = await chooseZipTarget(zipName);
+    if (target.kind === 'cancelled') return;
+    const inside = filesUnder(filesRef.current, path);
+    setZipJob({ name: zipName, done: 0, total: inside.length });
+    try {
+      const result = await downloadFolderZip(path, inside, target, progress => setZipJob({ name: zipName, done: progress.done, total: progress.total }));
+      if (result.blob) saveBlob(result.blob, zipName);
+      const notes = [
+        result.skipped ? `${result.skipped} view-only ${result.skipped === 1 ? 'file was' : 'files were'} left out` : '',
+        result.failed ? `${result.failed} could not be downloaded` : '',
+      ].filter(Boolean);
+      pushToast({ message: `${zipName} is ready${notes.length ? ` · ${notes.join(' · ')}` : ''}`, tone: result.failed ? 'error' : 'success' }, 6000);
+    } catch (err) {
+      pushToast({ message: err instanceof Error ? `${zipName}: ${err.message}` : `Could not create ${zipName}`, tone: 'error' });
+    } finally {
+      setZipJob(null);
+    }
+  };
+
   const handleRestore = async (name: string) => {
     try {
       const res = await fetch(`/api/v1/room/${roomId}/files/${encodeURIComponent(name)}/restore`, {
@@ -615,6 +731,72 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     return actions;
   };
 
+  const getFolderActions = (path: string): IFileAction[] => {
+    const inside = filesUnder(files || [], path);
+    const actions: IFileAction[] = [
+      {
+        label: 'Browse',
+        onSelect: () => {
+          setActiveName(null);
+          setBrowse({ path, selected: null });
+        },
+      },
+      { label: 'Download all · .zip', onSelect: () => handleDownloadFolder(path) },
+    ];
+    // Info: (20261108 - Luphia) 上傳中的資料夾不能刪除 (等上傳包完成)
+    const top = path.split('/')[0];
+    const stillUploading = chat.uploads.some(u => u.kind === 'folder' && u.filename === top);
+    if (!stillUploading && inside.length > 0 && inside.every(canManageFile)) {
+      actions.push({ label: 'Delete folder', onSelect: () => handleDeleteFolder(path), danger: true });
+    }
+    return actions;
+  };
+
+  /**
+   * Info: (20261108 - Luphia)
+   * 上傳前整理：同名的第一層資料夾自動改名「名稱 (2)」；有資料夾時先請使用者確認
+   */
+  const prepareUpload = (collected: ICollectedFiles) => {
+    if (collected.files.length === 0) {
+      if (collected.skipped) pushToast({ message: 'Nothing to upload (only system files were found).', tone: 'error' }, 4000);
+      return;
+    }
+    if (!settings?.canUpload) {
+      pushToast({ message: 'Only the room owner can add files here.', tone: 'error' });
+      return;
+    }
+    const taken = topLevelNames([...(files || []).map(f => f.filename), ...chat.uploads.map(u => u.filename)]);
+    const renames = new Map<string, string>();
+    const folders = new Map<string, { name: string; original: string; count: number; size: number }>();
+    const entries = collected.files.map(entry => {
+      const slash = entry.path.indexOf('/');
+      if (slash < 0) return entry;
+      const original = entry.path.slice(0, slash);
+      let name = renames.get(original);
+      if (!name) {
+        name = freeTopName(original, taken);
+        taken.add(name);
+        renames.set(original, name);
+      }
+      const summary = folders.get(name) ?? { name, original, count: 0, size: 0 };
+      summary.count += 1;
+      summary.size += entry.file.size;
+      folders.set(name, summary);
+      return { file: entry.file, path: `${name}${entry.path.slice(slash)}` };
+    });
+    if (folders.size === 0) {
+      uploadFiles(entries);
+      return;
+    }
+    setPendingDrop({
+      entries,
+      folders: [...folders.values()],
+      looseCount: entries.filter(e => !e.path.includes('/')).length,
+      skipped: collected.skipped,
+      truncated: collected.truncated,
+    });
+  };
+
   const handleSettingsChange = async (patch: Record<string, unknown>) => {
     setSettingsSaving(true);
     setSettingsError('');
@@ -640,11 +822,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
   const handlePickedFiles = (list: FileList | null) => {
     if (!list || list.length === 0) return;
-    if (!settings?.canUpload) {
-      pushToast({ message: 'Only the room owner can add files here.', tone: 'error' });
-      return;
-    }
-    uploadFiles(Array.from(list));
+    prepareUpload(collectPicked(list));
   };
 
   const runFind = (backwards = false) => {
@@ -680,17 +858,20 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     setFindPosition({ index: result.index, total: result.total });
   }, []);
 
+  // Info: (20261108 - Luphia) 左側清單：第一層資料夾 + 不在資料夾中的檔案 (依類型分組)
+  const rootListing = useMemo(() => listChildren(files || [], ''), [files]);
   const groups = useMemo(() => {
     const result: Record<TFileGroup, ILariaMetadata[]> = { documents: [], media: [], other: [] };
-    (files || []).forEach(f => result[getFileGroup(getFileKind(f.filename, f.mimeType))].push(f));
+    rootListing.files.forEach(f => result[getFileGroup(getFileKind(f.filename, f.mimeType))].push(f));
     return result;
-  }, [files]);
+  }, [rootListing]);
 
   // Info: (20261105 - Luphia) 尚未完成的上傳也列在檔案清單中 (不可點選)
   const pendingUploads = chat.uploads.filter(u => !(files || []).some(f => f.filename === u.filename));
+  const pendingFolders = pendingUploads.filter(u => u.kind === 'folder' && !rootListing.folders.some(f => f.name === u.filename));
   const uploadGroups = useMemo(() => {
     const result: Record<TFileGroup, typeof pendingUploads> = { documents: [], media: [], other: [] };
-    pendingUploads.forEach(u => result[getFileGroup(getFileKind(u.filename, u.mimeType))].push(u));
+    pendingUploads.filter(u => u.kind !== 'folder' && !u.filename.includes('/')).forEach(u => result[getFileGroup(getFileKind(u.filename, u.mimeType))].push(u));
     return result;
   }, [pendingUploads]);
   const thumbnails = useMemo(() => {
@@ -804,6 +985,46 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
             </span>
           )}
         </button>
+      )}
+
+      {(rootListing.folders.length > 0 || pendingFolders.length > 0) && (
+        <div className="flex flex-col gap-0.5">
+          <p className="mx-1.5 mb-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">Folders</p>
+          {rootListing.folders.map(folder => {
+            const isActive = !activeName && !callOpen && !!browse && (browse.path === folder.path || browse.path.startsWith(`${folder.path}/`));
+            const uploading = chat.uploads.find(u => u.kind === 'folder' && u.filename === folder.name);
+            return (
+              <button
+                key={folder.path}
+                type="button"
+                onClick={() => {
+                  setActiveName(null);
+                  setActiveHeading('');
+                  setCallOpen(false);
+                  setBrowse({ path: folder.path, selected: null });
+                  setNavOpen(false);
+                }}
+                aria-current={isActive ? 'page' : undefined}
+                className={`flex min-h-10 items-center gap-2.5 rounded-lg px-2.5 text-left text-[13px] transition-colors ${isActive ? 'bg-slate-800 font-semibold text-white' : 'text-slate-300 hover:bg-white/5'}`}
+              >
+                <FolderIcon className="h-4 w-4" />
+                <span className="min-w-0 flex-1 truncate">{folder.name}</span>
+                <span className={`shrink-0 font-mono text-[10px] ${uploading ? 'text-blue-300' : 'text-slate-500'}`}>
+                  {uploading ? `${uploading.shardsTotal ? Math.floor((uploading.shardsDone / uploading.shardsTotal) * 100) : 0}%` : folder.count}
+                </span>
+              </button>
+            );
+          })}
+          {pendingFolders.map(u => (
+            <span key={u.uploadId} className="flex min-h-9 items-center gap-2.5 px-2.5 text-[13px] italic text-slate-400">
+              <FolderIcon className="h-4 w-4 opacity-60" />
+              <span className="min-w-0 flex-1 truncate">{u.filename}</span>
+              <span className="shrink-0 font-mono text-[10px] not-italic text-blue-300">
+                {u.status === 'interrupted' ? 'paused' : `${u.shardsTotal ? Math.floor((u.shardsDone / u.shardsTotal) * 100) : 0}%`}
+              </span>
+            </span>
+          ))}
+        </div>
       )}
 
       {GROUP_ORDER.filter(group => groups[group].length > 0 || uploadGroups[group].length > 0).map(group => (
@@ -954,6 +1175,13 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           getActions={getFileActions}
           canDelete={canManageFile}
           callAction={callAction}
+          browse={browse}
+          onBrowse={(path, selected = null) => setBrowse(path ? { path, selected } : null)}
+          onUploadFolder={() => folderInputRef.current?.click()}
+          onDownloadFolder={handleDownloadFolder}
+          onDownloadFile={handleDownload}
+          folderActions={getFolderActions}
+          canDownloadFile={isDownloadAllowed}
           onDelete={file => handleDelete(file.filename)}
           files={files || []}
           uploads={chat.uploads}
@@ -1155,7 +1383,10 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           if (!settings?.canUpload) return;
           e.preventDefault();
           setDragActive(false);
-          handlePickedFiles(e.dataTransfer.files);
+          // Info: (20261108 - Luphia) 拖曳的項目必須在事件當下讀取 (之後 dataTransfer 會被清空)
+          collectDropped(e.dataTransfer)
+            .then(prepareUpload)
+            .catch(() => pushToast({ message: 'Could not read the dropped items.', tone: 'error' }));
         }}
       >
         <input
@@ -1169,9 +1400,24 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
             e.target.value = '';
           }}
         />
+        <input
+          ref={el => {
+            folderInputRef.current = el;
+            // Info: (20261108 - Luphia) 選擇整個資料夾 (React 不支援 webkitdirectory 屬性的型別)
+            el?.setAttribute('webkitdirectory', '');
+          }}
+          type="file"
+          multiple
+          className="hidden"
+          aria-label="Upload a folder"
+          onChange={e => {
+            handlePickedFiles(e.target.files);
+            e.target.value = '';
+          }}
+        />
         {dragActive && (
           <div className="pointer-events-none absolute inset-3 z-30 flex items-center justify-center rounded-2xl border-2 border-dashed border-blue-500 bg-blue-950/70 text-sm font-semibold text-blue-100">
-            Drop files to upload to this room
+            Drop files or folders to upload to this room
           </div>
         )}
         {openTabs.length > 0 && (
@@ -1201,7 +1447,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
                     className={`flex items-center gap-2 whitespace-nowrap text-[13px] ${selected ? 'font-semibold text-white' : 'text-slate-400 hover:text-slate-200'}`}
                   >
                     <span className={`h-2 w-2 rounded-sm ${FILE_KIND_DOT[kind]}`} aria-hidden="true" />
-                    {name}
+                    <span title={name}>{baseName(name)}</span>
                   </button>
                   <button
                     type="button"
@@ -1317,8 +1563,22 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         )}
       </aside>
 
-      {toasts.length > 0 && (
+      {(toasts.length > 0 || zipJob) && (
         <div className="fixed bottom-4 left-4 z-50 flex w-[min(340px,calc(100vw-2rem))] flex-col gap-2" role="status" aria-live="polite">
+          {zipJob && (
+            <div className="flex flex-col gap-2 rounded-[14px] border border-white/15 bg-slate-800 px-3.5 py-3 shadow-2xl shadow-black/50">
+              <div className="flex justify-between gap-3 text-[13px] text-slate-100">
+                <span className="min-w-0 truncate">Preparing {zipJob.name}</span>
+                <span className="shrink-0 font-mono text-blue-300">
+                  {zipJob.done} / {zipJob.total}
+                </span>
+              </div>
+              <div className="h-1 overflow-hidden rounded-full bg-white/10">
+                <div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${zipJob.total ? (zipJob.done / zipJob.total) * 100 : 0}%` }} />
+              </div>
+              <p className="text-[11px] text-slate-400">Files are downloaded and zipped in your browser.</p>
+            </div>
+          )}
           {toasts.map(toast => {
             const tone =
               toast.tone === 'success'
@@ -1358,6 +1618,61 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               </div>
             );
           })}
+        </div>
+      )}
+
+      {pendingDrop && (
+        <div className="fixed inset-x-0 top-viewport z-50 flex h-viewport items-center justify-center bg-black/70 p-4">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="folder-upload-title"
+            className="flex w-full max-w-md flex-col gap-3 rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-2xl"
+          >
+            <h2 id="folder-upload-title" className="text-lg font-bold text-slate-100">
+              {pendingDrop.folders.length === 1 ? `Upload folder “${pendingDrop.folders[0].name}”?` : `Upload ${pendingDrop.folders.length} folders?`}
+            </h2>
+            <ul className="flex flex-col gap-2">
+              {pendingDrop.folders.map(folder => (
+                <li key={folder.name} className="flex items-center gap-3 rounded-xl border border-white/10 bg-[#0B1222] px-3 py-2.5">
+                  <FolderIcon className="h-7 w-7" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-semibold text-slate-100">{folder.name}</span>
+                    <span className="text-xs text-slate-400">
+                      {folder.count} {folder.count === 1 ? 'file' : 'files'} · {formatBytes(folder.size)}
+                      {folder.name !== folder.original ? ` · renamed from “${folder.original}”` : ''}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs leading-5 text-slate-400">
+              Folder structure is kept.
+              {pendingDrop.looseCount > 0 ? ` ${pendingDrop.looseCount} loose ${pendingDrop.looseCount === 1 ? 'file is' : 'files are'} uploaded too.` : ''}
+              {pendingDrop.skipped > 0 ? ` Skipped ${pendingDrop.skipped} system ${pendingDrop.skipped === 1 ? 'item' : 'items'} (like .DS_Store).` : ''}
+              {pendingDrop.folders.some(f => f.name !== f.original) ? ' A folder with the same name already exists, so the new one gets a number.' : ''}
+            </p>
+            {pendingDrop.truncated && (
+              <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                Only the first {pendingDrop.entries.length} files will be uploaded. Split very large folders into several uploads.
+              </p>
+            )}
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setPendingDrop(null)} className="h-10 rounded-xl border border-white/10 px-4 text-[13px] font-semibold text-slate-300 hover:bg-white/5">
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  uploadFiles(pendingDrop.entries);
+                  setPendingDrop(null);
+                }}
+                className="h-10 rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white hover:bg-blue-500"
+              >
+                Upload {pendingDrop.entries.length} {pendingDrop.entries.length === 1 ? 'file' : 'files'}
+              </button>
+            </div>
+          </section>
         </div>
       )}
 

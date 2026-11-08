@@ -7,6 +7,8 @@ import Link from 'next/link';
 import FileActionsMenu, { type IFileAction } from '@/components/file_actions_menu';
 import RoomSharePanel from '@/components/room_share_panel';
 import { ShareIcon, UploadIcon } from '@/components/icons';
+import { BundleUploadCard, ColumnBrowser, FolderCard } from '@/components/folder_browser';
+import { filesUnder, listChildren } from '@/lib/folder_tree';
 
 const SHARDS_PER_STRIPE = 8;
 const DATA_SHARDS = 5;
@@ -254,6 +256,14 @@ interface IRoomActivityProps {
   onDelete: (file: ILariaMetadata) => void;
   // Info: (20261106 - Luphia) 通話按鈕 (未啟用通話時為 null)
   callAction?: React.ReactNode;
+  // Info: (20261108 - Luphia) 資料夾 (C 方案)：瀏覽中的資料夾與選取的檔案
+  browse: { path: string; selected: string | null } | null;
+  onBrowse: (path: string | null, selected?: string | null) => void;
+  onUploadFolder: () => void;
+  onDownloadFolder: (path: string) => void;
+  onDownloadFile: (filename: string) => void;
+  folderActions: (path: string) => IFileAction[];
+  canDownloadFile: (file: ILariaMetadata) => boolean;
 }
 
 /**
@@ -284,6 +294,13 @@ export default function RoomActivity({
   canDelete,
   onDelete,
   callAction = null,
+  browse,
+  onBrowse,
+  onUploadFolder,
+  onDownloadFolder,
+  onDownloadFile,
+  folderActions,
+  canDownloadFile,
 }: IRoomActivityProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const uploading = uploads.filter(u => u.status === 'uploading').length;
@@ -293,6 +310,23 @@ export default function RoomActivity({
   const isMine = (file: ILariaMetadata) => !!myUploaderId && file.uploaderId === myUploaderId;
   const uploaderLabel = (file: ILariaMetadata) =>
     isMine(file) ? 'You' : file.uploaderName ? `@${file.uploaderName}` : file.uploaderId ? 'Someone else' : 'Earlier upload';
+  // Info: (20261108 - Luphia) 第一層：資料夾 (上傳包) 與不在資料夾中的檔案
+  const root = listChildren(files, '');
+  const looseNames = new Set(root.files.map(f => f.filename));
+  const looseRecent = recent.filter(f => looseNames.has(f.filename));
+  const folders = [...root.folders].sort((a, b) => {
+    const newest = (path: string) => Math.max(0, ...filesUnder(files, path).map(f => newFiles[f.filename] ?? f.uploadedAt ?? 0));
+    return newest(b.path) - newest(a.path);
+  });
+  const folderOwner = (path: string) => {
+    const inside = filesUnder(files, path);
+    const first = inside[0];
+    if (!first) return { label: '', mine: false };
+    const sameUploader = inside.every(f => f.uploaderId === first.uploaderId);
+    if (!sameUploader) return { label: 'Several people', mine: false };
+    return { label: uploaderLabel(first), mine: isMine(first) };
+  };
+  const pendingFiles = new Set(uploads.filter(u => u.kind !== 'folder').map(u => u.filename));
 
   return (
     <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-8 sm:py-7">
@@ -326,14 +360,23 @@ export default function RoomActivity({
               Share
             </button>
             {canUpload && (
-              <button
-                type="button"
-                onClick={onUpload}
-                className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white hover:bg-blue-500"
-              >
-                <UploadIcon className="h-4 w-4" />
-                Upload files
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={onUploadFolder}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 px-4 text-[13px] font-semibold text-slate-200 hover:bg-white/5"
+                >
+                  Upload folder
+                </button>
+                <button
+                  type="button"
+                  onClick={onUpload}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white hover:bg-blue-500"
+                >
+                  <UploadIcon className="h-4 w-4" />
+                  Upload files
+                </button>
+              </>
             )}
           </div>
         </header>
@@ -356,7 +399,7 @@ export default function RoomActivity({
 
         {canUpload ? (
           <p className="hidden rounded-[14px] border border-dashed border-slate-700 p-3.5 text-center text-[13px] text-slate-400 md:block">
-            Drop files anywhere on this page to add them to the room
+            Drop files or whole folders anywhere on this page to add them to the room
           </p>
         ) : (
           <p className="rounded-[14px] border border-white/10 bg-white/5 p-3 text-center text-[13px] text-slate-400">
@@ -370,15 +413,25 @@ export default function RoomActivity({
               Uploading now
             </h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              {uploads.map(upload => (
-                <UploadCard
-                  key={upload.uploadId}
-                  upload={upload}
-                  isMine={upload.uploader.memberId === myMemberId}
-                  watching={watching.has(upload.uploadId)}
-                  onToggleWatch={() => onToggleWatch(upload.uploadId)}
-                />
-              ))}
+              {uploads.map(upload =>
+                upload.kind === 'folder' ? (
+                  <BundleUploadCard
+                    key={upload.uploadId}
+                    upload={upload}
+                    isMine={upload.uploader.memberId === myMemberId}
+                    watching={watching.has(upload.uploadId)}
+                    onToggleWatch={() => onToggleWatch(upload.uploadId)}
+                  />
+                ) : (
+                  <UploadCard
+                    key={upload.uploadId}
+                    upload={upload}
+                    isMine={upload.uploader.memberId === myMemberId}
+                    watching={watching.has(upload.uploadId)}
+                    onToggleWatch={() => onToggleWatch(upload.uploadId)}
+                  />
+                )
+              )}
             </div>
           </section>
         )}
@@ -386,12 +439,53 @@ export default function RoomActivity({
         {recent.length > 0 && (
           <section aria-labelledby="activity-recent" className="flex flex-col gap-3">
             <h2 id="activity-recent" className="text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">
-              Files
+              {folders.length > 0 ? 'Folders and files' : 'Files'}
             </h2>
+
+            {browse && (
+              <ColumnBrowser
+                files={files}
+                path={browse.path}
+                selected={browse.selected}
+                uploading={pendingFiles}
+                canDownloadFile={canDownloadFile}
+                uploaderLabel={uploaderLabel}
+                onNavigate={(path, selected) => onBrowse(path || null, selected)}
+                onOpenFile={onOpenFile}
+                onDownloadFile={onDownloadFile}
+                onDownloadFolder={onDownloadFolder}
+                onClose={() => onBrowse(null)}
+              />
+            )}
+
+            {folders.length > 0 && (
+              <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2">
+                {folders.map(folder => {
+                  const owner = folderOwner(folder.path);
+                  const inside = filesUnder(files, folder.path);
+                  const isNew = inside.some(f => newFiles[f.filename] !== undefined && now - newFiles[f.filename] < NEW_FILE_WINDOW_MS);
+                  const top = listChildren(files, folder.path);
+                  const preview = [...top.files.map(f => f.filename.slice(folder.path.length + 1)), ...top.folders.map(f => `${f.name}/`)].slice(0, 6).join(', ');
+                  return (
+                    <FolderCard
+                      key={folder.path}
+                      folder={folder}
+                      uploaderLabel={owner.label}
+                      isMine={owner.mine}
+                      isNew={isNew}
+                      preview={preview}
+                      actions={folderActions(folder.path)}
+                      onBrowse={() => onBrowse(folder.path)}
+                      onDownload={() => onDownloadFolder(folder.path)}
+                    />
+                  );
+                })}
+              </div>
+            )}
 
             {/* Info: (20261106 - Luphia) 桌面版：卡片 + ⋯ 選單 */}
             <div className="hidden grid-cols-2 gap-3.5 md:grid lg:grid-cols-3 2xl:grid-cols-4">
-              {recent.map(file => {
+              {looseRecent.map(file => {
                 const kind = getFileKind(file.filename, file.mimeType);
                 const addedAt = newFiles[file.filename];
                 const isNew = addedAt !== undefined && now - addedAt < NEW_FILE_WINDOW_MS;
@@ -434,7 +528,7 @@ export default function RoomActivity({
 
             {/* Info: (20261106 - Luphia) 手機版：清單，自己的檔案可左滑刪除 */}
             <ul className="md:hidden">
-              {recent.map(file => {
+              {looseRecent.map(file => {
                 const kind = getFileKind(file.filename, file.mimeType);
                 const mine = isMine(file);
                 return (
@@ -456,7 +550,7 @@ export default function RoomActivity({
                 );
               })}
             </ul>
-            <p className="text-xs text-slate-500 md:hidden">Swipe left on a file you uploaded to delete it.</p>
+            {looseRecent.length > 0 && <p className="text-xs text-slate-500 md:hidden">Swipe left on a file you uploaded to delete it.</p>}
           </section>
         )}
 
