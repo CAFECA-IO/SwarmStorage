@@ -142,11 +142,21 @@ export function useRoomUploader({ roomId, password, allowDownload, chat, onError
           parts,
         });
       };
+      // Info: (20261108 - Luphia) 節流期間的最後一次變化也要送出 (檔案完成後若沒有新的進度，原本會一直停在舊狀態)
+      let trailing: ReturnType<typeof setTimeout> | null = null;
+      let ended = false;
       const maybeReport = () => {
         const now = Date.now();
         if (now - lastReport >= REPORT_INTERVAL_MS) {
           lastReport = now;
           report('uploading');
+        } else if (!trailing) {
+          trailing = setTimeout(() => {
+            trailing = null;
+            if (ended) return;
+            lastReport = Date.now();
+            report('uploading');
+          }, REPORT_INTERVAL_MS - (now - lastReport));
         }
       };
 
@@ -174,6 +184,8 @@ export function useRoomUploader({ roomId, password, allowDownload, chat, onError
         }
       };
       await Promise.all(Array.from({ length: Math.min(FOLDER_CONCURRENCY, entries.length) }, worker));
+      ended = true;
+      if (trailing) clearTimeout(trailing);
       await report(filesDone > 0 ? 'complete' : 'failed');
       if (failed > 0) onError(`${folder}: ${failed} of ${entries.length} files could not be uploaded`);
       onFolderDone?.(folder, filesDone, failed);

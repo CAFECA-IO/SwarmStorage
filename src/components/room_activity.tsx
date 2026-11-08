@@ -314,7 +314,9 @@ export default function RoomActivity({
   const root = listChildren(files, '');
   const looseNames = new Set(root.files.map(f => f.filename));
   const looseRecent = recent.filter(f => looseNames.has(f.filename));
-  const folders = [...root.folders].sort((a, b) => {
+  // Info: (20261108 - Luphia) 上傳中的資料夾只顯示上傳卡片，避免同時出現一張內容不完整的資料夾卡片
+  const uploadingFolders = new Set(uploads.filter(u => u.kind === 'folder' && u.status === 'uploading').map(u => u.filename));
+  const folders = [...root.folders].filter(folder => !uploadingFolders.has(folder.name)).sort((a, b) => {
     const newest = (path: string) => Math.max(0, ...filesUnder(files, path).map(f => newFiles[f.filename] ?? f.uploadedAt ?? 0));
     return newest(b.path) - newest(a.path);
   });

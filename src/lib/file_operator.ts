@@ -68,6 +68,21 @@ const PARITY_SHARDS = 3;
 const TOTAL_SHARDS = DATA_SHARDS + PARITY_SHARDS;
 const SHARD_SIZE = 4 * 1024 * 1024; // 4MB
 const DATA_STRIPE_SIZE = DATA_SHARDS * SHARD_SIZE; // 20MB
+const SHARD_ALIGN = 1024;
+
+/**
+ * Info: (20261108 - Luphia)
+ * 小於一個條帶 (20MB) 的檔案改用較小的分片 (檔案大小 / 5，以 1KB 對齊)
+ * 舊做法一律補滿 4MB，1KB 的檔案也要上傳 32MB，資料夾內大量小檔會幾乎停滯
+ */
+const shardSizeFor = (size: number): number =>
+  size >= DATA_STRIPE_SIZE ? SHARD_SIZE : Math.max(SHARD_ALIGN, Math.ceil(size / DATA_SHARDS / SHARD_ALIGN) * SHARD_ALIGN);
+
+// Info: (20261108 - Luphia) 舊 metadata 一律為 4MB
+const shardSizeOf = (metadata: ILariaMetadata): number => {
+  const size = metadata.algorithm?.shardSize;
+  return Number.isInteger(size) && size > 0 && size <= SHARD_SIZE ? size : SHARD_SIZE;
+};
 
 // Info: (20261105 - Luphia) 與伺服器端 Laria 共用的 Reed-Solomon (8, 5) 實作
 const rse = new ReedSolomonErasure(DATA_SHARDS, PARITY_SHARDS);
@@ -145,12 +160,13 @@ const fetchStripe = async (
   onShardDone: () => void
 ): Promise<(Uint8Array | null)[]> => {
   const cids = metadata.shards.slice(stripeIndex * TOTAL_SHARDS, (stripeIndex + 1) * TOTAL_SHARDS);
+  const shardSize = shardSizeOf(metadata);
   const shards: (Uint8Array | null)[] = new Array(TOTAL_SHARDS).fill(null);
   await Promise.all(
     cids.map(async (cid, i) => {
       try {
         const buffer = new Uint8Array(await (await downloadSingleFile(cid)).arrayBuffer());
-        if (buffer.length === SHARD_SIZE) shards[i] = buffer;
+        if (buffer.length === shardSize) shards[i] = buffer;
       } catch {
         // Info: (20260113 - Luphia) Missing shard
       } finally {
@@ -170,7 +186,9 @@ const missingIndices = (shards: (Uint8Array | null)[]): number[] =>
 export const uploadFile = async (file: File, callbacks: IUploadCallbacks, options: IUploadOptions = {}) => {
   try {
     const originalFileSize = file.size;
-    const totalStripes = Math.ceil(originalFileSize / DATA_STRIPE_SIZE);
+    const shardSize = shardSizeFor(originalFileSize);
+    const stripeSize = shardSize * DATA_SHARDS;
+    const totalStripes = Math.ceil(originalFileSize / stripeSize);
     const totalUploads = totalStripes * TOTAL_SHARDS;
     let uploaded = 0;
 
@@ -178,16 +196,16 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
     if (callbacks.onShardProgress) callbacks.onShardProgress(0, totalUploads);
 
     for (let stripeIndex = 0; stripeIndex < totalStripes; stripeIndex++) {
-      const start = stripeIndex * DATA_STRIPE_SIZE;
-      const end = Math.min(start + DATA_STRIPE_SIZE, originalFileSize);
+      const start = stripeIndex * stripeSize;
+      const end = Math.min(start + stripeSize, originalFileSize);
 
-      // Info: (20261105 - Luphia) 最後一條帶以 0 填滿 20MB
-      const dataStripe = new Uint8Array(DATA_STRIPE_SIZE);
+      // Info: (20261105 - Luphia) 最後一條帶以 0 填滿
+      const dataStripe = new Uint8Array(stripeSize);
       dataStripe.set(new Uint8Array(await file.slice(start, end).arrayBuffer()));
 
       const shards: Uint8Array[] = [
-        ...Array.from({ length: DATA_SHARDS }, (_, i) => dataStripe.subarray(i * SHARD_SIZE, (i + 1) * SHARD_SIZE)),
-        ...Array.from({ length: PARITY_SHARDS }, () => new Uint8Array(SHARD_SIZE)),
+        ...Array.from({ length: DATA_SHARDS }, (_, i) => dataStripe.subarray(i * shardSize, (i + 1) * shardSize)),
+        ...Array.from({ length: PARITY_SHARDS }, () => new Uint8Array(shardSize)),
       ];
 
       // Info: (20261105 - Luphia) 真實 Reed-Solomon 編碼，任意 5 個分片即可還原
@@ -215,7 +233,7 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
       algorithm: {
         k: DATA_SHARDS,
         m: PARITY_SHARDS,
-        shardSize: SHARD_SIZE,
+        shardSize,
         parity: 'reed-solomon',
       },
       allowDownload: options.allowDownload !== false,
@@ -297,9 +315,10 @@ export const downloadFromMetadata = async (metadata: ILariaMetadata, callbacks: 
     const { originalFileSize, shards: shardCids, filename } = metadata;
     const totalStripes = Math.ceil(shardCids.length / TOTAL_SHARDS);
     const protectedByParity = isParityProtected(metadata);
+    const shardSize = shardSizeOf(metadata);
 
     const stats: IShardStats = { total: shardCids.length, missingData: 0, missingParity: 0, missing: [], reconstructed: false };
-    const output = new Uint8Array(totalStripes * DATA_STRIPE_SIZE);
+    const output = new Uint8Array(totalStripes * shardSize * DATA_SHARDS);
     let fetched = 0;
 
     for (let stripeIdx = 0; stripeIdx < totalStripes; stripeIdx++) {
@@ -333,7 +352,7 @@ export const downloadFromMetadata = async (metadata: ILariaMetadata, callbacks: 
       }
 
       for (let i = 0; i < DATA_SHARDS; i++) {
-        output.set(shards[i] as Uint8Array, stripeIdx * DATA_STRIPE_SIZE + i * SHARD_SIZE);
+        output.set(shards[i] as Uint8Array, (stripeIdx * DATA_SHARDS + i) * shardSize);
       }
     }
 
