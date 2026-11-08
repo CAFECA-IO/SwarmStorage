@@ -38,16 +38,38 @@ const etaOf = (upload: IUploadStatus): string | null => {
   return remaining < 60 ? `~${Math.max(1, Math.round(remaining))} s left` : `~${Math.round(remaining / 60)} min left`;
 };
 
+export interface IUploadCancel {
+  busy: boolean;
+  onCancel: () => void;
+}
+
+// Info: (20261108 - Luphia) 取消上傳 (只在執行上傳的分頁顯示)
+export function CancelUploadButton({ name, busy, onCancel }: IUploadCancel & { name: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onCancel}
+      disabled={busy}
+      aria-label={`Cancel upload of ${name}`}
+      className="h-8 shrink-0 rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-200 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-200 disabled:cursor-default disabled:opacity-60 disabled:hover:border-white/10 disabled:hover:bg-transparent disabled:hover:text-slate-200"
+    >
+      {busy ? 'Cancelling…' : 'Cancel'}
+    </button>
+  );
+}
+
 export function BundleUploadCard({
   upload,
   isMine,
   watching,
   onToggleWatch,
+  cancel,
 }: {
   upload: IUploadStatus;
   isMine: boolean;
   watching: boolean;
   onToggleWatch: () => void;
+  cancel: IUploadCancel | null;
 }) {
   const percent = percentOf(upload);
   const interrupted = upload.status === 'interrupted';
@@ -92,6 +114,11 @@ export function BundleUploadCard({
             </div>
           ))}
         </dl>
+      )}
+      {cancel && (
+        <div className="flex justify-end">
+          <CancelUploadButton name={upload.filename} {...cancel} />
+        </div>
       )}
       {!isMine && (
         <button

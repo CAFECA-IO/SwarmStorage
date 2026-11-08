@@ -275,13 +275,38 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     pushToastRef.current = pushToast;
   });
   const handleUploadError = useCallback((message: string) => pushToastRef.current({ message, tone: 'error' }), []);
-  const uploadFiles = useRoomUploader({
+  // Info: (20261108 - Luphia) 取消上傳的結果提示
+  const handleUploadCancelled = useCallback((name: string, result: { kept: number; removed: number; failedToRemove: number }) => {
+    const detail = result.kept
+      ? ` · kept ${result.kept} uploaded ${result.kept === 1 ? 'file' : 'files'}`
+      : result.removed
+        ? ` · removed ${result.removed} uploaded ${result.removed === 1 ? 'file' : 'files'}`
+        : '';
+    pushToastRef.current(
+      result.failedToRemove
+        ? { message: `Upload of ${name} cancelled · ${result.failedToRemove} uploaded files could not be removed`, tone: 'error' }
+        : { message: `Upload of ${name} cancelled${detail}`, tone: 'info' },
+      4000
+    );
+  }, []);
+  const uploader = useRoomUploader({
     roomId,
     password: chatPassword,
     allowDownload: settings?.allowDownload ?? true,
     chat,
     onError: handleUploadError,
+    onCancelled: handleUploadCancelled,
   });
+  const uploadFiles = uploader.upload;
+  // Info: (20261108 - Luphia) 取消資料夾上傳前的確認 (保留或刪除已完成的檔案)
+  const [cancelAsk, setCancelAsk] = useState<{ uploadId: string; name: string; done: number; total: number } | null>(null);
+  const requestCancel = (upload: { uploadId: string; filename: string; kind?: string; filesDone?: number; filesTotal?: number }) => {
+    if (upload.kind !== 'folder' || !upload.filesDone) {
+      uploader.cancel(upload.uploadId);
+      return;
+    }
+    setCancelAsk({ uploadId: upload.uploadId, name: upload.filename, done: upload.filesDone, total: upload.filesTotal ?? 0 });
+  };
 
   // Info: (20261108 - Luphia) 資料夾上傳包完成：通知有按「Notify me」的人
   function handleBundleComplete(uploadId: string, folder: string, count: number) {
@@ -1187,6 +1212,9 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           uploads={chat.uploads}
           online={chat.online}
           myMemberId={chat.me?.memberId ?? null}
+          cancellable={uploader.active}
+          cancelling={uploader.cancelling}
+          onCancelUpload={requestCancel}
           expiryText={expiryText}
           newFiles={newFiles}
           thumbnails={thumbnails}
@@ -1618,6 +1646,53 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               </div>
             );
           })}
+        </div>
+      )}
+
+      {cancelAsk && (
+        <div className="fixed inset-x-0 top-viewport z-50 flex h-viewport items-center justify-center bg-black/70 p-4">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cancel-upload-title"
+            className="flex w-full max-w-lg flex-col gap-3 rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-2xl"
+          >
+            <h2 id="cancel-upload-title" className="text-lg font-bold text-slate-100">
+              Cancel uploading “{cancelAsk.name}”?
+            </h2>
+            <p className="text-sm leading-6 text-slate-300">
+              {cancelAsk.done} of {cancelAsk.total} files are already in the room. Remove them too, or keep them as an incomplete folder?
+            </p>
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => setCancelAsk(null)}
+                className="h-10 whitespace-nowrap rounded-xl border border-white/10 px-4 text-[13px] font-semibold text-slate-300 hover:bg-white/5"
+              >
+                Keep uploading
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  uploader.cancel(cancelAsk.uploadId, { keepFiles: true });
+                  setCancelAsk(null);
+                }}
+                className="h-10 whitespace-nowrap rounded-xl border border-white/10 px-4 text-[13px] font-semibold text-slate-100 hover:bg-white/5"
+              >
+                Cancel, keep {cancelAsk.done} {cancelAsk.done === 1 ? 'file' : 'files'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  uploader.cancel(cancelAsk.uploadId);
+                  setCancelAsk(null);
+                }}
+                className="h-10 whitespace-nowrap rounded-xl bg-red-600 px-4 text-[13px] font-semibold text-white hover:bg-red-500"
+              >
+                Cancel and remove
+              </button>
+            </div>
+          </section>
         </div>
       )}
 

@@ -7,7 +7,7 @@ import Link from 'next/link';
 import FileActionsMenu, { type IFileAction } from '@/components/file_actions_menu';
 import RoomSharePanel from '@/components/room_share_panel';
 import { ShareIcon, UploadIcon } from '@/components/icons';
-import { BundleUploadCard, ColumnBrowser, FolderCard } from '@/components/folder_browser';
+import { BundleUploadCard, CancelUploadButton, ColumnBrowser, FolderCard, type IUploadCancel } from '@/components/folder_browser';
 import { filesUnder, listChildren } from '@/lib/folder_tree';
 
 const SHARDS_PER_STRIPE = 8;
@@ -60,11 +60,13 @@ function UploadCard({
   isMine,
   watching,
   onToggleWatch,
+  cancel,
 }: {
   upload: IUploadStatus;
   isMine: boolean;
   watching: boolean;
   onToggleWatch: () => void;
+  cancel: IUploadCancel | null;
 }) {
   const kind = getFileKind(upload.filename, upload.mimeType);
   const percent = upload.shardsTotal ? Math.floor((upload.shardsDone / upload.shardsTotal) * 100) : 0;
@@ -125,6 +127,7 @@ function UploadCard({
             {stripes > 0 ? ` · stripe ${currentStripe} of ${stripes}` : ''}
           </span>
         )}
+        {cancel && <CancelUploadButton name={upload.filename} {...cancel} />}
         {!isMine && !interrupted && (
           <button
             type="button"
@@ -243,6 +246,10 @@ interface IRoomActivityProps {
   uploads: IUploadStatus[];
   online: number;
   myMemberId: string | null;
+  // Info: (20261108 - Luphia) 這個分頁可以取消的上傳，與正在停止中的上傳
+  cancellable: ReadonlySet<string>;
+  cancelling: ReadonlySet<string>;
+  onCancelUpload: (upload: IUploadStatus) => void;
   expiryText: string | null;
   newFiles: Record<string, number>;
   thumbnails: Record<string, string>;
@@ -282,6 +289,9 @@ export default function RoomActivity({
   uploads,
   online,
   myMemberId,
+  cancellable,
+  cancelling,
+  onCancelUpload,
   expiryText,
   newFiles,
   thumbnails,
@@ -420,6 +430,7 @@ export default function RoomActivity({
                   <BundleUploadCard
                     key={upload.uploadId}
                     upload={upload}
+                    cancel={cancellable.has(upload.uploadId) ? { busy: cancelling.has(upload.uploadId), onCancel: () => onCancelUpload(upload) } : null}
                     isMine={upload.uploader.memberId === myMemberId}
                     watching={watching.has(upload.uploadId)}
                     onToggleWatch={() => onToggleWatch(upload.uploadId)}
@@ -428,6 +439,7 @@ export default function RoomActivity({
                   <UploadCard
                     key={upload.uploadId}
                     upload={upload}
+                    cancel={cancellable.has(upload.uploadId) ? { busy: cancelling.has(upload.uploadId), onCancel: () => onCancelUpload(upload) } : null}
                     isMine={upload.uploader.memberId === myMemberId}
                     watching={watching.has(upload.uploadId)}
                     onToggleWatch={() => onToggleWatch(upload.uploadId)}

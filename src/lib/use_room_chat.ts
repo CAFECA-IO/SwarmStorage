@@ -144,6 +144,9 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
         if (previous && event.reason === 'complete') {
           system(`${previous.filename} is ready (${previous.filesTotal ?? 0} files)`);
           onUploadCompleteRef.current?.(previous);
+        } else if (previous && event.reason === 'cancelled') {
+          const who = previous.uploader.memberId === myId ? 'You' : previous.uploader.nickname;
+          system(`${who} cancelled the upload of ${previous.filename}`);
         } else if (previous) {
           system(`Upload of ${previous.filename} ${event.reason === 'failed' ? 'failed' : 'stopped'}`);
         }

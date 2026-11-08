@@ -13,7 +13,11 @@ export interface IUploadOptions {
   allowDownload?: boolean;
   // Info: (20261108 - Luphia) 儲存於房間的檔名 (資料夾上傳時為相對路徑)；未指定時使用 file.name
   filename?: string;
+  // Info: (20261108 - Luphia) 取消上傳：中止進行中的分片請求，onError 收到 UPLOAD_CANCELLED
+  signal?: AbortSignal;
 }
+
+export const UPLOAD_CANCELLED = 'Upload cancelled';
 
 export interface IMissingShard {
   stripe: number;
@@ -94,8 +98,9 @@ export const isDownloadAllowed = (metadata: ILariaMetadata): boolean => metadata
 /**
  * Info: (20251028 - Luphia) Helper to upload a single Blob to the backend
  */
-const uploadSingleFile = (file: Blob, fileName: string): Promise<string> => {
+const uploadSingleFile = (file: Blob, fileName: string, signal?: AbortSignal): Promise<string> => {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error(UPLOAD_CANCELLED));
     const formData = new FormData();
     formData.append('file', file, fileName);
 
@@ -118,6 +123,11 @@ const uploadSingleFile = (file: Blob, fileName: string): Promise<string> => {
     xhr.onerror = () => {
       reject(new Error('Network error'));
     };
+
+    const abort = () => xhr.abort();
+    xhr.onabort = () => reject(new Error(UPLOAD_CANCELLED));
+    xhr.onloadend = () => signal?.removeEventListener('abort', abort);
+    signal?.addEventListener('abort', abort, { once: true });
 
     xhr.send(formData);
   });
@@ -195,7 +205,9 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
     const shardCids: string[] = [];
     if (callbacks.onShardProgress) callbacks.onShardProgress(0, totalUploads);
 
+    const { signal } = options;
     for (let stripeIndex = 0; stripeIndex < totalStripes; stripeIndex++) {
+      if (signal?.aborted) throw new Error(UPLOAD_CANCELLED);
       const start = stripeIndex * stripeSize;
       const end = Math.min(start + stripeSize, originalFileSize);
 
@@ -215,7 +227,7 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
         shards.map(async (shard, i) => {
           // Info: (20251028 - Luphia) Fix for Uint8Array not assignable to BlobPart issue by casting
           const shardBlob = new Blob([shard as unknown as BlobPart]);
-          const cid = await uploadSingleFile(shardBlob, `${file.name}.part${stripeIndex * TOTAL_SHARDS + i}`);
+          const cid = await uploadSingleFile(shardBlob, `${file.name}.part${stripeIndex * TOTAL_SHARDS + i}`, signal);
           uploaded++;
           if (callbacks.onProgress) callbacks.onProgress(Math.min((uploaded / totalUploads) * 100, 99));
           if (callbacks.onShardProgress) callbacks.onShardProgress(uploaded, totalUploads);
@@ -241,7 +253,7 @@ export const uploadFile = async (file: File, callbacks: IUploadCallbacks, option
     };
 
     const metadataBlob = new Blob([JSON.stringify(metadata)], { type: 'application/json' });
-    const metadataCid = await uploadSingleFile(metadataBlob, `${file.name}.meta.json`);
+    const metadataCid = await uploadSingleFile(metadataBlob, `${file.name}.meta.json`, signal);
 
     if (callbacks.onProgress) callbacks.onProgress(100);
     if (callbacks.onSuccess) callbacks.onSuccess(metadataCid, metadata);
