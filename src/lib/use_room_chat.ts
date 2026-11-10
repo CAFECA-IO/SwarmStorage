@@ -40,8 +40,10 @@ export interface IUploadReportInput {
   mimeType: string;
   shardsDone: number;
   shardsTotal: number;
-  status: 'uploading' | 'failed' | 'cancelled' | 'complete';
+  status: 'uploading' | 'paused' | 'failed' | 'cancelled' | 'complete';
   kind?: 'file' | 'folder';
+  bytesDone?: number;
+  note?: string;
   filesDone?: number;
   filesTotal?: number;
   parts?: { name: string; done: number; total: number }[];
@@ -135,7 +137,9 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
               : `${who} started uploading ${upload.filename}`
           );
         }
-        else if (previous.status === 'uploading' && upload.status === 'interrupted') system(`Upload of ${upload.filename} was interrupted`);
+        else if (previous.status === 'uploading' && upload.status === 'interrupted')
+          system(upload.paused ? `Upload of ${upload.filename} paused` : `Upload of ${upload.filename} was interrupted`);
+        else if (previous.status === 'interrupted' && previous.paused && upload.status === 'uploading') system(`Upload of ${upload.filename} resumed`);
         knownUploads.set(upload.uploadId, upload);
         setUploads(prev => ({ ...prev, [upload.uploadId]: upload }));
       } else if (event.type === 'upload-removed') {

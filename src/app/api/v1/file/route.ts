@@ -4,6 +4,7 @@ import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
 
 const IPFS_API_URL = 'http://127.0.0.1:5001';
+const IPFS_TIMEOUT_MS = 120 * 1000;
 
 // Info: (20251022 - Luphia) CORS 標頭
 const corsHeaders = {
@@ -40,10 +41,22 @@ export async function POST(request: NextRequest) {
     ipfsFormData.append('file', file, file.name);
 
     // Info: (20251022 - Luphia) 3. 將檔案發送到 IPFS 節點的 /api/v0/add
-    const ipfsResponse = await fetch(`${IPFS_API_URL}/api/v0/add`, {
-      method: 'POST',
-      body: ipfsFormData,
-    });
+    // Info: (20261110 - Luphia) 儲存節點沒有回應時不要無限等待 (前端會重試)
+    let ipfsResponse: Response;
+    try {
+      ipfsResponse = await fetch(`${IPFS_API_URL}/api/v0/add`, {
+        method: 'POST',
+        body: ipfsFormData,
+        signal: AbortSignal.timeout(IPFS_TIMEOUT_MS),
+      });
+    } catch (err) {
+      const timedOut = err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+      console.error('IPFS API unreachable:', err);
+      return jsonFail(ApiCode.SERVER_ERROR, timedOut ? 'The storage node did not respond in time' : 'The storage node is unreachable', {
+        status: timedOut ? 504 : 502,
+        headers: corsHeaders,
+      });
+    }
 
     if (!ipfsResponse.ok) {
       const errorText = await ipfsResponse.text();

@@ -47,6 +47,11 @@ export interface IUploadStatus {
   filesTotal?: number;
   // Info: (20261108 - Luphia) 資料夾內第一層項目的進度 (最多 12 項)
   parts?: IUploadPart[];
+  // Info: (20261110 - Luphia) 已送出的位元組 (分片存好前也能看到進度)
+  bytesDone?: number;
+  // Info: (20261110 - Luphia) 上傳者端暫停 (重試仍失敗、等待續傳)；note 為給房間內的人看的簡短說明
+  paused?: boolean;
+  note?: string;
 }
 
 export interface IUploadPart {
@@ -99,6 +104,9 @@ globalForChat.drophereChatHub = state;
 // Info: (20261105 - Luphia) 上傳進度：超過 60 秒沒有更新視為中斷，中斷 30 秒後移除
 const UPLOAD_STALE_MS = 60 * 1000;
 const UPLOAD_INTERRUPTED_TTL_MS = 30 * 1000;
+// Info: (20261110 - Luphia) 上傳者端暫停 (分頁仍開著，可續傳) 保留較久
+const UPLOAD_PAUSED_TTL_MS = 15 * 60 * 1000;
+const MAX_NOTE_LENGTH = 120;
 const UPLOAD_SWEEP_MS = 10 * 1000;
 const MAX_UPLOADS_PER_ROOM = 50;
 const MAX_FILENAME_LENGTH = 255;
@@ -301,7 +309,7 @@ const sweepUploads = () => {
         upload.status = 'interrupted';
         upload.updatedAt = now;
         broadcast(roomId, { type: 'upload', upload });
-      } else if (upload.status === 'interrupted' && now - upload.updatedAt > UPLOAD_INTERRUPTED_TTL_MS) {
+      } else if (upload.status === 'interrupted' && now - upload.updatedAt > (upload.paused ? UPLOAD_PAUSED_TTL_MS : UPLOAD_INTERRUPTED_TTL_MS)) {
         removeUpload(roomId, upload.uploadId, 'interrupted');
       }
     });
@@ -326,6 +334,8 @@ export interface IUploadReport {
   filesDone?: unknown;
   filesTotal?: unknown;
   parts?: unknown;
+  bytesDone?: unknown;
+  note?: unknown;
 }
 
 const MAX_UPLOAD_PARTS = 12;
@@ -373,7 +383,9 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
     if (existing) removeUpload(roomId, uploadId, report.status);
     return { ok: true };
   }
-  if (report.status !== 'uploading') return { ok: false, reason: 'invalid' };
+  if (report.status !== 'uploading' && report.status !== 'paused') return { ok: false, reason: 'invalid' };
+  const paused = report.status === 'paused';
+  const note = typeof report.note === 'string' && report.note.trim() ? report.note.trim().slice(0, MAX_NOTE_LENGTH) : undefined;
 
   const filename = typeof report.filename === 'string' ? report.filename.trim() : '';
   const size = Number(report.size);
@@ -393,6 +405,9 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
     return { ok: false, reason: 'invalid' };
   }
 
+  const bytesRaw = Number(report.bytesDone);
+  const bytesDone = report.bytesDone === undefined || !Number.isFinite(bytesRaw) ? undefined : Math.max(0, Math.min(size, bytesRaw));
+
   const isFolder = report.kind === 'folder';
   const folder = isFolder ? folderFields(report) : null;
   if (isFolder && !folder) return { ok: false, reason: 'invalid' };
@@ -405,8 +420,11 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
       existing.filesDone = Math.max(existing.filesDone ?? 0, folder.filesDone ?? 0);
       existing.parts = folder.parts;
     }
+    if (bytesDone !== undefined) existing.bytesDone = bytesDone;
     existing.updatedAt = now;
-    existing.status = 'uploading';
+    existing.status = paused ? 'interrupted' : 'uploading';
+    existing.paused = paused || undefined;
+    existing.note = note;
     broadcast(roomId, { type: 'upload', upload: existing });
     return { ok: true };
   }
@@ -427,7 +445,10 @@ export function reportUpload(roomId: string, token: string | null, report: IUplo
     shardsTotal,
     startedAt: now,
     updatedAt: now,
-    status: 'uploading',
+    status: paused ? 'interrupted' : 'uploading',
+    ...(paused ? { paused: true } : {}),
+    ...(note ? { note } : {}),
+    ...(bytesDone !== undefined ? { bytesDone } : {}),
     ...(folder ? { kind: 'folder' as const, ...folder } : {}),
   };
   room.set(uploadId, upload);

@@ -7,7 +7,9 @@ import Link from 'next/link';
 import FileActionsMenu, { type IFileAction } from '@/components/file_actions_menu';
 import RoomSharePanel from '@/components/room_share_panel';
 import { ShareIcon, UploadIcon } from '@/components/icons';
-import { BundleUploadCard, CancelUploadButton, ColumnBrowser, FolderCard, type IUploadCancel } from '@/components/folder_browser';
+import { BundleUploadCard, ColumnBrowser, etaOf, FolderCard, LiveDot, motionText, percentOf, UploadControls, uploadFraction, type IUploadControl } from '@/components/folder_browser';
+import { useUploadMotion } from '@/lib/use_upload_motion';
+import { storedCount, type IUnfinishedUpload } from '@/lib/upload_resume';
 import { filesUnder, listChildren } from '@/lib/folder_tree';
 
 const SHARDS_PER_STRIPE = 8;
@@ -39,14 +41,6 @@ export const formatRelative = (timestamp: number, now: number): string => {
   return `${Math.floor(hours / 24)} d ago`;
 };
 
-const formatEta = (upload: IUploadStatus): string | null => {
-  const elapsed = upload.updatedAt - upload.startedAt;
-  if (upload.shardsDone === 0 || elapsed <= 0) return null;
-  const remaining = ((upload.shardsTotal - upload.shardsDone) * elapsed) / upload.shardsDone / 1000;
-  if (remaining < 60) return `~${Math.max(1, Math.round(remaining))} s left`;
-  return `~${Math.round(remaining / 60)} min left`;
-};
-
 function TypeTile({ filename, kind, className = 'h-10 w-10 text-[10px]' }: { filename: string; kind: TFileKind; className?: string }) {
   return (
     <span className={`flex shrink-0 items-center justify-center rounded-[10px] font-mono font-semibold uppercase ${KIND_TILE[kind]} ${className}`}>
@@ -60,22 +54,31 @@ function UploadCard({
   isMine,
   watching,
   onToggleWatch,
-  cancel,
+  control,
 }: {
   upload: IUploadStatus;
   isMine: boolean;
   watching: boolean;
   onToggleWatch: () => void;
-  cancel: IUploadCancel | null;
+  control: IUploadControl | null;
 }) {
   const kind = getFileKind(upload.filename, upload.mimeType);
-  const percent = upload.shardsTotal ? Math.floor((upload.shardsDone / upload.shardsTotal) * 100) : 0;
+  const percent = percentOf(upload);
   const stripes = Math.ceil(upload.shardsTotal / SHARDS_PER_STRIPE);
   const currentStripe = Math.min(stripes, Math.floor(upload.shardsDone / SHARDS_PER_STRIPE) + 1);
-  const bytesDone = upload.shardsTotal ? (upload.size * upload.shardsDone) / upload.shardsTotal : 0;
-  const interrupted = upload.status === 'interrupted';
-  const eta = interrupted ? null : formatEta(upload);
+  const bytesDone = upload.size * uploadFraction(upload);
+  const localPause = control?.paused ?? null;
+  const interrupted = upload.status === 'interrupted' || localPause !== null;
+  const pausedNote = localPause ?? (upload.paused ? (upload.note ?? 'Paused') : null);
   const who = isMine ? 'You' : upload.uploader.nickname;
+  // Info: (20261110 - Luphia) 資料都已送出、分片尚未存好：等待儲存節點
+  const waitingForStorage = !interrupted && bytesDone >= upload.size && upload.size > 0 && upload.shardsDone < upload.shardsTotal;
+  const motion = useUploadMotion(upload, localPause !== null);
+  const live = motionText(motion, !interrupted);
+  // Info: (20261110 - Luphia) 沒有在動時不顯示剩餘時間 (會誤導)
+  const eta = interrupted || !motion.moving ? null : etaOf(upload);
+  // Info: (20261110 - Luphia) 傳送中的分片 (每個分頁同時最多 4 個)
+  const inFlightEnd = motion.moving ? Math.min(upload.shardsTotal, upload.shardsDone + 4) : upload.shardsDone;
 
   return (
     <article className={`flex flex-col gap-3 rounded-2xl border bg-[#0B1222] p-4 ${interrupted ? 'border-amber-500/40' : 'border-white/10'}`}>
@@ -87,7 +90,9 @@ function UploadCard({
             {who} · {formatBytes(Math.round(bytesDone))} / {formatBytes(upload.size)}
             {eta ? ` · ${eta}` : ''}
           </p>
+          {live && <p className={`mt-0.5 truncate text-xs ${motion.moving ? 'text-blue-200' : 'text-slate-400'}`}>{live}</p>}
         </div>
+        {!interrupted && <LiveDot moving={motion.moving} />}
         <span className="font-mono text-xl text-slate-100">{percent}%</span>
       </div>
 
@@ -101,7 +106,7 @@ function UploadCard({
           {Array.from({ length: upload.shardsTotal }, (_, i) => (
             <span
               key={i}
-              className={`h-[18px] rounded-sm ${i < upload.shardsDone ? (i % SHARDS_PER_STRIPE < DATA_SHARDS ? 'bg-blue-600' : 'bg-amber-600') : 'bg-slate-800'}`}
+              className={`h-[18px] rounded-sm ${i < upload.shardsDone ? (i % SHARDS_PER_STRIPE < DATA_SHARDS ? 'bg-blue-600' : 'bg-amber-600') : i < inFlightEnd ? 'shard-pulse bg-blue-900' : 'bg-slate-800'}`}
             />
           ))}
         </div>
@@ -114,20 +119,26 @@ function UploadCard({
           aria-valuemax={100}
           aria-label={`${upload.filename} upload progress`}
         >
-          <div className="h-full bg-blue-600 transition-all duration-500" style={{ width: `${percent}%` }} />
+          <div className={`h-full bg-blue-600 transition-all duration-500 ${motion.moving ? 'upload-stripes' : ''}`} style={{ width: `${percent}%` }} />
         </div>
       )}
 
       <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
-        {interrupted ? (
+        {pausedNote ? (
+          <span className="min-w-0 text-amber-300">Paused · {pausedNote}</span>
+        ) : interrupted ? (
           <span className="text-amber-300">Interrupted · waiting for {who === 'You' ? 'you' : who}</span>
+        ) : upload.note ? (
+          <span className="min-w-0 text-amber-300">{upload.note}</span>
+        ) : waitingForStorage ? (
+          <span>All data sent · waiting for the storage node ({upload.shardsDone} of {upload.shardsTotal} shards stored)</span>
         ) : (
           <span>
             {upload.shardsDone} of {upload.shardsTotal} shards stored
             {stripes > 0 ? ` · stripe ${currentStripe} of ${stripes}` : ''}
           </span>
         )}
-        {cancel && <CancelUploadButton name={upload.filename} {...cancel} />}
+        {control && <UploadControls name={upload.filename} {...control} />}
         {!isMine && !interrupted && (
           <button
             type="button"
@@ -138,6 +149,53 @@ function UploadCard({
             {watching ? 'Will notify' : 'Notify me'}
           </button>
         )}
+      </div>
+    </article>
+  );
+}
+
+/**
+ * Info: (20261110 - Luphia)
+ * 先前分頁留下的未完成上傳：瀏覽器無法再讀取原本的檔案，需重新選擇同一個檔案才能續傳
+ */
+function UnfinishedCard({ entry, onResume, onDiscard }: { entry: IUnfinishedUpload; onResume: (file: File) => void; onDiscard: () => void }) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const kind = getFileKind(entry.path, entry.mimeType);
+  const done = storedCount(entry);
+  return (
+    <article aria-label={`Unfinished upload ${entry.path}`} className="flex flex-col gap-3 rounded-2xl border border-amber-500/40 bg-[#0B1222] p-4">
+      <div className="flex items-center gap-3">
+        <TypeTile filename={entry.path} kind={kind} />
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-sm font-semibold text-slate-100">{entry.path}</h3>
+          <p className="mt-0.5 truncate text-xs text-slate-400">
+            You · {formatBytes(entry.size)} · {done} of {entry.stored.length} shards stored
+          </p>
+        </div>
+      </div>
+      <p className="text-xs leading-5 text-amber-300">Upload stopped when the page was closed. Choose “{entry.name}” again to continue where it left off.</p>
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onDiscard} className="h-8 rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-200 hover:bg-white/5">
+          Discard
+        </button>
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="h-8 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-500"
+        >
+          Choose file to resume
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          hidden
+          aria-label={`Choose ${entry.name} to resume`}
+          onChange={e => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) onResume(file);
+          }}
+        />
       </div>
     </article>
   );
@@ -249,7 +307,13 @@ interface IRoomActivityProps {
   // Info: (20261108 - Luphia) 這個分頁可以取消的上傳，與正在停止中的上傳
   cancellable: ReadonlySet<string>;
   cancelling: ReadonlySet<string>;
+  pausedUploads: ReadonlyMap<string, string>;
   onCancelUpload: (upload: IUploadStatus) => void;
+  onResumeUpload: (uploadId: string) => void;
+  // Info: (20261110 - Luphia) 先前分頁留下的未完成上傳 (只有自己看得到)
+  unfinished: IUnfinishedUpload[];
+  onResumeUnfinished: (uploadId: string, file: File) => void;
+  onDiscardUnfinished: (uploadId: string) => void;
   expiryText: string | null;
   newFiles: Record<string, number>;
   thumbnails: Record<string, string>;
@@ -291,7 +355,12 @@ export default function RoomActivity({
   myMemberId,
   cancellable,
   cancelling,
+  pausedUploads,
   onCancelUpload,
+  onResumeUpload,
+  unfinished,
+  onResumeUnfinished,
+  onDiscardUnfinished,
   expiryText,
   newFiles,
   thumbnails,
@@ -314,6 +383,17 @@ export default function RoomActivity({
 }: IRoomActivityProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const uploading = uploads.filter(u => u.status === 'uploading').length;
+  const controlFor = (upload: IUploadStatus): IUploadControl | null =>
+    cancellable.has(upload.uploadId)
+      ? {
+          busy: cancelling.has(upload.uploadId),
+          paused: pausedUploads.get(upload.uploadId) ?? null,
+          onCancel: () => onCancelUpload(upload),
+          onResume: () => onResumeUpload(upload.uploadId),
+        }
+      : null;
+  const unfinishedHere = unfinished;
+  const unfinishedIds = new Set(unfinishedHere.map(e => e.uploadId));
   const recent = [...files].sort(
     (a, b) => (newFiles[b.filename] ?? b.uploadedAt ?? 0) - (newFiles[a.filename] ?? a.uploadedAt ?? 0)
   );
@@ -419,18 +499,21 @@ export default function RoomActivity({
           </p>
         )}
 
-        {uploads.length > 0 && (
+        {(uploads.length > 0 || unfinishedHere.length > 0) && (
           <section aria-labelledby="activity-uploading" className="flex flex-col gap-3">
             <h2 id="activity-uploading" className="text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">
               Uploading now
             </h2>
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              {uploads.map(upload =>
+              {unfinishedHere.map(entry => (
+                <UnfinishedCard key={entry.uploadId} entry={entry} onResume={file => onResumeUnfinished(entry.uploadId, file)} onDiscard={() => onDiscardUnfinished(entry.uploadId)} />
+              ))}
+              {uploads.filter(u => !unfinishedIds.has(u.uploadId)).map(upload =>
                 upload.kind === 'folder' ? (
                   <BundleUploadCard
                     key={upload.uploadId}
                     upload={upload}
-                    cancel={cancellable.has(upload.uploadId) ? { busy: cancelling.has(upload.uploadId), onCancel: () => onCancelUpload(upload) } : null}
+                    control={controlFor(upload)}
                     isMine={upload.uploader.memberId === myMemberId}
                     watching={watching.has(upload.uploadId)}
                     onToggleWatch={() => onToggleWatch(upload.uploadId)}
@@ -439,7 +522,7 @@ export default function RoomActivity({
                   <UploadCard
                     key={upload.uploadId}
                     upload={upload}
-                    cancel={cancellable.has(upload.uploadId) ? { busy: cancelling.has(upload.uploadId), onCancel: () => onCancelUpload(upload) } : null}
+                    control={controlFor(upload)}
                     isMine={upload.uploader.memberId === myMemberId}
                     watching={watching.has(upload.uploadId)}
                     onToggleWatch={() => onToggleWatch(upload.uploadId)}

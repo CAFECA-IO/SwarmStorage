@@ -1,4 +1,5 @@
 import type { ILariaMetadata } from '@/lib/file_operator';
+import { formatIdle, formatSpeed, IDLE_AFTER_MS, useUploadMotion, type IUploadMotion } from '@/lib/use_upload_motion';
 import type { IUploadStatus } from '@/lib/chat_hub';
 import { getExtension, getFileKind } from '@/lib/file_types';
 import { formatBytes } from '@/lib/utils';
@@ -29,32 +30,69 @@ const KIND_DOT: Record<string, string> = {
   other: 'bg-slate-400',
 };
 
-const percentOf = (upload: IUploadStatus) => (upload.shardsTotal ? Math.floor((upload.shardsDone / upload.shardsTotal) * 100) : 0);
+// Info: (20261110 - Luphia) 進度以送出的位元組計算 (分片存好前也會前進)；舊版回報沒有位元組時改用分片數
+export const uploadFraction = (upload: IUploadStatus): number => {
+  if (typeof upload.bytesDone === 'number' && upload.size > 0) return Math.min(1, upload.bytesDone / upload.size);
+  return upload.shardsTotal ? upload.shardsDone / upload.shardsTotal : 0;
+};
+export const percentOf = (upload: IUploadStatus) => Math.floor(uploadFraction(upload) * 100);
 
-const etaOf = (upload: IUploadStatus): string | null => {
+export const etaOf = (upload: IUploadStatus): string | null => {
   const elapsed = upload.updatedAt - upload.startedAt;
-  if (!upload.shardsDone || elapsed <= 0) return null;
-  const remaining = ((upload.shardsTotal - upload.shardsDone) * elapsed) / upload.shardsDone / 1000;
+  const fraction = uploadFraction(upload);
+  if (fraction <= 0.01 || fraction >= 1 || elapsed <= 0) return null;
+  const remaining = ((1 - fraction) * elapsed) / fraction / 1000;
   return remaining < 60 ? `~${Math.max(1, Math.round(remaining))} s left` : `~${Math.round(remaining / 60)} min left`;
 };
 
-export interface IUploadCancel {
-  busy: boolean;
-  onCancel: () => void;
+// Info: (20261110 - Luphia) 正在動的上傳：閃爍的小圓點 + 速度；超過 10 秒沒有新進度則顯示多久沒有新資料
+export function LiveDot({ moving }: { moving: boolean }) {
+  return (
+    <span className="relative flex h-2 w-2 shrink-0" aria-hidden="true">
+      {moving && <span className="absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75 motion-safe:animate-ping" />}
+      <span className={`relative inline-flex h-2 w-2 rounded-full ${moving ? 'bg-blue-400' : 'bg-slate-600'}`} />
+    </span>
+  );
 }
 
-// Info: (20261108 - Luphia) 取消上傳 (只在執行上傳的分頁顯示)
-export function CancelUploadButton({ name, busy, onCancel }: IUploadCancel & { name: string }) {
+export const motionText = (motion: IUploadMotion, uploading: boolean): string | null => {
+  if (!uploading) return null;
+  if (motion.moving) return motion.speed ? formatSpeed(motion.speed) : null;
+  return motion.idleSeconds * 1000 >= IDLE_AFTER_MS ? `no new data for ${formatIdle(motion.idleSeconds)}` : null;
+};
+
+export interface IUploadControl {
+  busy: boolean;
+  // Info: (20261110 - Luphia) 暫停原因 (null 表示進行中)
+  paused: string | null;
+  onCancel: () => void;
+  onResume: () => void;
+}
+
+// Info: (20261108 - Luphia) 取消 / 續傳 (只在執行上傳的分頁顯示)
+export function UploadControls({ name, busy, paused, onCancel, onResume }: IUploadControl & { name: string }) {
   return (
-    <button
-      type="button"
-      onClick={onCancel}
-      disabled={busy}
-      aria-label={`Cancel upload of ${name}`}
-      className="h-8 shrink-0 rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-200 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-200 disabled:cursor-default disabled:opacity-60 disabled:hover:border-white/10 disabled:hover:bg-transparent disabled:hover:text-slate-200"
-    >
-      {busy ? 'Cancelling…' : 'Cancel'}
-    </button>
+    <span className="flex shrink-0 items-center gap-2">
+      {paused !== null && !busy && (
+        <button
+          type="button"
+          onClick={onResume}
+          aria-label={`Resume upload of ${name}`}
+          className="h-8 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-500"
+        >
+          Resume
+        </button>
+      )}
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={busy}
+        aria-label={`Cancel upload of ${name}`}
+        className="h-8 rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-200 hover:border-red-500/50 hover:bg-red-500/10 hover:text-red-200 disabled:cursor-default disabled:opacity-60 disabled:hover:border-white/10 disabled:hover:bg-transparent disabled:hover:text-slate-200"
+      >
+        {busy ? 'Cancelling…' : 'Cancel'}
+      </button>
+    </span>
   );
 }
 
@@ -63,19 +101,23 @@ export function BundleUploadCard({
   isMine,
   watching,
   onToggleWatch,
-  cancel,
+  control,
 }: {
   upload: IUploadStatus;
   isMine: boolean;
   watching: boolean;
   onToggleWatch: () => void;
-  cancel: IUploadCancel | null;
+  control: IUploadControl | null;
 }) {
   const percent = percentOf(upload);
-  const interrupted = upload.status === 'interrupted';
-  const eta = interrupted ? null : etaOf(upload);
+  const interrupted = upload.status === 'interrupted' || (control?.paused ?? null) !== null;
   const who = isMine ? 'You' : upload.uploader.nickname;
-  const bytesDone = (upload.size * upload.shardsDone) / (upload.shardsTotal || 1);
+  const bytesDone = upload.size * uploadFraction(upload);
+  const note = control?.paused ?? upload.note;
+  const motion = useUploadMotion(upload, (control?.paused ?? null) !== null);
+  const live = motionText(motion, !interrupted);
+  // Info: (20261110 - Luphia) 沒有在動時不顯示剩餘時間 (會誤導)
+  const eta = interrupted || !motion.moving ? null : etaOf(upload);
 
   return (
     <article
@@ -88,20 +130,30 @@ export function BundleUploadCard({
           <h3 className="truncate text-[15px] font-bold text-slate-100">{upload.filename}</h3>
           <p className={`text-xs ${interrupted ? 'text-amber-300' : 'text-blue-300'}`}>
             {who} · {upload.filesDone ?? 0} of {upload.filesTotal ?? 0} files · {formatBytes(bytesDone)} of {formatBytes(upload.size)}
-            {interrupted ? ' · interrupted' : eta ? ` · ${eta}` : ''}
+            {interrupted ? (upload.paused || control?.paused ? ' · paused' : ' · interrupted') : eta ? ` · ${eta}` : ''}
           </p>
+          {live && (
+            <p className={`mt-0.5 text-xs ${motion.moving ? 'text-blue-200' : 'text-slate-400'}`} aria-live="off">
+              {live}
+            </p>
+          )}
+          {note && <p className="mt-0.5 text-xs text-amber-300">{note}</p>}
         </div>
+        {!interrupted && <LiveDot moving={motion.moving} />}
         <span className="font-mono text-xl font-bold text-blue-300">{percent}%</span>
       </div>
       <div
-        className="h-1.5 overflow-hidden rounded-full bg-slate-800"
+        className={`h-1.5 overflow-hidden rounded-full bg-slate-800 ${motion.moving && percent < 2 ? 'upload-stripes' : ''}`}
         role="progressbar"
         aria-valuenow={percent}
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={`${upload.filename} upload progress`}
       >
-        <div className={`h-full rounded-full ${interrupted ? 'bg-amber-400' : 'bg-blue-500'}`} style={{ width: `${percent}%` }} />
+        <div
+          className={`h-full rounded-full transition-[width] duration-700 ${interrupted ? 'bg-amber-400' : 'bg-blue-500'} ${motion.moving ? 'upload-stripes' : ''}`}
+          style={{ width: `${percent}%` }}
+        />
       </div>
       {upload.parts && upload.parts.length > 0 && (
         <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 text-xs">
@@ -115,9 +167,9 @@ export function BundleUploadCard({
           ))}
         </dl>
       )}
-      {cancel && (
+      {control && (
         <div className="flex justify-end">
-          <CancelUploadButton name={upload.filename} {...cancel} />
+          <UploadControls name={upload.filename} {...control} />
         </div>
       )}
       {!isMine && (

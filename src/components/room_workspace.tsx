@@ -35,7 +35,7 @@ import { useRoomUploader } from '@/lib/use_room_uploader';
 import { collectDropped, collectPicked, type ICollectedFiles, type IPathedFile } from '@/lib/folder_entries';
 import { baseName, filesUnder, freeTopName, listChildren, topLevelNames } from '@/lib/folder_tree';
 import { chooseZipTarget, downloadFolderZip, zipNameOf } from '@/lib/folder_zip';
-import { FolderIcon } from '@/components/folder_browser';
+import { FolderIcon, percentOf } from '@/components/folder_browser';
 import { addRecentRoom, memberHeaders } from '@/lib/member';
 import type { IRoomSettings } from '@/lib/room_store';
 import type { IHtmlViewerHandle } from '@/components/html_viewer';
@@ -289,6 +289,11 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       4000
     );
   }, []);
+  const handleUploadPaused = useCallback(
+    (name: string, reason: string) =>
+      pushToastRef.current({ message: `Upload of ${name} paused: ${reason}. It resumes when you press Resume or the connection comes back.`, tone: 'error' }, 6000),
+    []
+  );
   const uploader = useRoomUploader({
     roomId,
     password: chatPassword,
@@ -296,6 +301,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     chat,
     onError: handleUploadError,
     onCancelled: handleUploadCancelled,
+    onPaused: handleUploadPaused,
   });
   const uploadFiles = uploader.upload;
   // Info: (20261108 - Luphia) 取消資料夾上傳前的確認 (保留或刪除已完成的檔案)
@@ -1035,7 +1041,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
                 <FolderIcon className="h-4 w-4" />
                 <span className="min-w-0 flex-1 truncate">{folder.name}</span>
                 <span className={`shrink-0 font-mono text-[10px] ${uploading ? 'text-blue-300' : 'text-slate-500'}`}>
-                  {uploading ? `${uploading.shardsTotal ? Math.floor((uploading.shardsDone / uploading.shardsTotal) * 100) : 0}%` : folder.count}
+                  {uploading ? `${percentOf(uploading)}%` : folder.count}
                 </span>
               </button>
             );
@@ -1045,7 +1051,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               <FolderIcon className="h-4 w-4 opacity-60" />
               <span className="min-w-0 flex-1 truncate">{u.filename}</span>
               <span className="shrink-0 font-mono text-[10px] not-italic text-blue-300">
-                {u.status === 'interrupted' ? 'paused' : `${u.shardsTotal ? Math.floor((u.shardsDone / u.shardsTotal) * 100) : 0}%`}
+                {u.status === 'interrupted' || uploader.paused.has(u.uploadId) ? (u.paused || uploader.paused.has(u.uploadId) ? 'paused' : 'interrupted') : `${percentOf(u)}%`}
               </span>
             </span>
           ))}
@@ -1081,10 +1087,13 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               className="flex min-h-9 items-center gap-2.5 px-2.5 text-[13px] italic text-slate-400"
               title={u.status === 'interrupted' ? 'Upload interrupted' : 'Uploading'}
             >
-              <span className="h-2 w-2 shrink-0 rounded-sm border border-dashed border-slate-400" aria-hidden="true" />
+              <span
+                className={`h-2 w-2 shrink-0 rounded-sm border border-dashed ${u.status === 'uploading' && !uploader.paused.has(u.uploadId) ? 'border-blue-300 motion-safe:animate-spin' : 'border-slate-400'}`}
+                aria-hidden="true"
+              />
               <span className="min-w-0 flex-1 truncate">{u.filename}</span>
               <span className={`shrink-0 font-mono text-[10px] not-italic ${u.status === 'interrupted' ? 'text-amber-300' : 'text-blue-300'}`}>
-                {u.status === 'interrupted' ? 'paused' : `${u.shardsTotal ? Math.floor((u.shardsDone / u.shardsTotal) * 100) : 0}%`}
+                {u.status === 'interrupted' || uploader.paused.has(u.uploadId) ? (u.paused || uploader.paused.has(u.uploadId) ? 'paused' : 'interrupted') : `${percentOf(u)}%`}
               </span>
             </span>
           ))}
@@ -1214,7 +1223,16 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           myMemberId={chat.me?.memberId ?? null}
           cancellable={uploader.active}
           cancelling={uploader.cancelling}
+          pausedUploads={uploader.paused}
           onCancelUpload={requestCancel}
+          onResumeUpload={uploader.resume}
+          unfinished={settings?.canUpload ? uploader.unfinished : []}
+          onResumeUnfinished={(uploadId, file) => {
+            if (!uploader.resumeUnfinished(uploadId, file)) {
+              pushToast({ message: `“${file.name}” is not the same file (name, size or date differ). Choose the original file, or discard the unfinished upload.`, tone: 'error' }, 6000);
+            }
+          }}
+          onDiscardUnfinished={uploader.discardUnfinished}
           expiryText={expiryText}
           newFiles={newFiles}
           thumbnails={thumbnails}
