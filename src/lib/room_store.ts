@@ -14,6 +14,8 @@ import {
 } from '@/lib/room_access';
 import { endCall } from '@/lib/call_service';
 import { announceFile, announceFileRemoved, closeRoom, onlineCount, uploadingCount } from '@/lib/chat_hub';
+import { notifyDocChangedElsewhere } from '@/lib/doc_invalidate';
+import { DATA_SHARDS, PARITY_SHARDS, SHARD_SIZE, decodeShards, encodeShards } from '@/lib/doc_codec';
 
 /**
  * Info: (20261106 - Luphia)
@@ -408,7 +410,101 @@ export async function saveFileMetadata(
 
   await writeMetadataFile(metadataPathOf(roomPath, saved.filename), saved);
   announceFile(roomId, saved, uploadId, bundleId);
+  notifyDocChangedElsewhere(roomId, saved.filename);
   return { ok: true, metadata: saved };
+}
+
+export async function readFileMetadata(roomPath: string, filename: string): Promise<TFileMetadata | null> {
+  if (!isValidFilename(filename)) return null;
+  try {
+    return JSON.parse(await fs.readFile(metadataPathOf(roomPath, filename), 'utf-8'));
+  } catch {
+    return null;
+  }
+}
+
+const shardsOf = (metadata: TFileMetadata | null): string[] =>
+  metadata && Array.isArray(metadata.shards) ? (metadata.shards as unknown[]).filter((c): c is string => typeof c === 'string') : [];
+
+/**
+ * Info: (20261118 - Luphia)
+ * 由伺服器取得房間檔案內容 (文件共筆載入)：讀取分片並以 Reed-Solomon 補回遺失的資料分片
+ */
+export async function readRoomFileBytes(metadata: TFileMetadata): Promise<Uint8Array> {
+  const shards = shardsOf(metadata);
+  const size = Number(metadata.originalFileSize) || 0;
+  const algorithm = (metadata.algorithm ?? {}) as { shardSize?: number };
+  const shardSize = Number(algorithm.shardSize) || SHARD_SIZE;
+  if (shards.length === 0) return new Uint8Array(0);
+  const pieces = await Promise.all(
+    shards.map(async cid => {
+      try {
+        const res = await fetch(`${IPFS_API_URL}/api/v0/cat?arg=${encodeURIComponent(cid)}`, { method: 'POST', signal: AbortSignal.timeout(30 * 1000) });
+        return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+      } catch {
+        return null;
+      }
+    })
+  );
+  return decodeShards(pieces, size, shardSize);
+}
+
+async function ipfsAdd(data: Uint8Array, name: string): Promise<string> {
+  const form = new FormData();
+  form.append('file', new Blob([data as unknown as BlobPart]), name);
+  const res = await fetch(`${IPFS_API_URL}/api/v0/add`, { method: 'POST', body: form, signal: AbortSignal.timeout(120 * 1000) });
+  if (!res.ok) throw new Error(`IPFS add failed (${res.status})`);
+  return (await res.json()).Hash as string;
+}
+
+/**
+ * Info: (20261118 - Luphia)
+ * 由伺服器寫入文件新版本 (共筆存檔)：分片格式與瀏覽器上傳相同；保留原上傳者與下載設定，
+ * 新檔案的上傳者為建立的人；舊版本不再被引用的分片會解除釘選
+ */
+export async function writeDocVersion(
+  roomId: string,
+  roomPath: string,
+  filename: string,
+  content: string,
+  creator: { memberHash: string | null; name: string | null },
+  editedBy: string | null
+): Promise<TFileMetadata> {
+  const bytes = new TextEncoder().encode(content);
+  const { shardSize, shards } = encodeShards(bytes);
+  const base = filename.split('/').pop() || filename;
+  const cids = await Promise.all(shards.map((shard, i) => ipfsAdd(shard, `${base}.part${i}`)));
+  const existing = await readFileMetadata(roomPath, filename);
+  const saved: TFileMetadata = {
+    ...(existing ?? {}),
+    filename,
+    originalFileSize: bytes.length,
+    mimeType: 'text/markdown',
+    shards: cids,
+    algorithm: { k: DATA_SHARDS, m: PARITY_SHARDS, shardSize, parity: 'reed-solomon' },
+    allowDownload: existing ? existing.allowDownload !== false : true,
+    uploadedAt: existing && typeof existing.uploadedAt === 'number' ? existing.uploadedAt : Date.now(),
+    editedAt: Date.now(),
+    editedBy,
+    uploaderId: existing ? (existing.uploaderId ?? null) : uploaderIdFor(roomId, creator.memberHash),
+    uploaderName: existing ? (existing.uploaderName ?? null) : creator.name,
+  };
+  await writeMetadataFile(metadataPathOf(roomPath, filename), saved);
+  announceFile(roomId, saved, null);
+  const previous = shardsOf(existing).filter(cid => !cids.includes(cid));
+  if (previous.length) releaseShards(previous).catch(() => undefined);
+  return saved;
+}
+
+// Info: (20261118 - Luphia) 解除不再被任何檔案引用的分片釘選
+async function releaseShards(shards: string[]) {
+  const referenced = await collectReferencedCids();
+  const releasable = [...new Set(shards)].filter(cid => !referenced.has(cid));
+  await Promise.all(
+    releasable.map(cid =>
+      fetch(`${IPFS_API_URL}/api/v0/pin/rm?arg=${encodeURIComponent(cid)}`, { method: 'POST' }).catch(() => undefined)
+    )
+  );
 }
 
 const pendingDeletes = new Map<string, ReturnType<typeof setTimeout>>();
@@ -440,6 +536,7 @@ export async function deleteFile(
   await fs.rm(source, { force: true });
   await pruneEmptyDirs(roomPath, source);
   announceFileRemoved(roomId, filename);
+  notifyDocChangedElsewhere(roomId, filename);
 
   const key = `${roomId}/${filename}`;
   clearTimeout(pendingDeletes.get(key));
@@ -483,6 +580,7 @@ export async function restoreFile(
   await fs.rm(trashPath, { force: true });
   await pruneEmptyDirs(path.join(roomPath, TRASH_DIR), trashPath);
   announceFile(roomId, restored, null);
+  notifyDocChangedElsewhere(roomId, restored.filename);
   return { ok: true, metadata: restored };
 }
 
@@ -500,17 +598,10 @@ async function finalizeDelete(roomPath: string, filename: string) {
   }
   await fs.rm(trashPath, { force: true });
   await pruneEmptyDirs(path.join(roomPath, TRASH_DIR), trashPath);
-  const shards = Array.isArray(metadata.shards) ? (metadata.shards as unknown[]).filter((c): c is string => typeof c === 'string') : [];
+  const shards = shardsOf(metadata);
   if (shards.length === 0) return;
-
   // Info: (20261106 - Luphia) 內容相同的分片 CID 相同 (例如全為 0 的填充分片)，仍被其他檔案使用時不可解除
-  const referenced = await collectReferencedCids();
-  const releasable = [...new Set(shards)].filter(cid => !referenced.has(cid));
-  await Promise.all(
-    releasable.map(cid =>
-      fetch(`${IPFS_API_URL}/api/v0/pin/rm?arg=${encodeURIComponent(cid)}`, { method: 'POST' }).catch(() => undefined)
-    )
-  );
+  await releaseShards(shards);
 }
 
 async function collectReferencedCids(): Promise<Set<string>> {

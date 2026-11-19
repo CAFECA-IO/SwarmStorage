@@ -331,6 +331,8 @@ interface IRoomActivityProps {
   browse: { path: string; selected: string | null } | null;
   onBrowse: (path: string | null, selected?: string | null) => void;
   onUploadFolder: () => void;
+  // Info: (20261118 - Luphia) 新增文件 (Markdown 編輯器)
+  onNewDocument: () => void;
   onDownloadFolder: (path: string) => void;
   onDownloadFile: (filename: string) => void;
   folderActions: (path: string) => IFileAction[];
@@ -376,6 +378,7 @@ export default function RoomActivity({
   browse,
   onBrowse,
   onUploadFolder,
+  onNewDocument,
   onDownloadFolder,
   onDownloadFile,
   folderActions,
@@ -453,6 +456,13 @@ export default function RoomActivity({
             </button>
             {canUpload && (
               <>
+                <button
+                  type="button"
+                  onClick={onNewDocument}
+                  className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/10 px-4 text-[13px] font-semibold text-slate-200 hover:bg-white/5"
+                >
+                  New document
+                </button>
                 <button
                   type="button"
                   onClick={onUploadFolder}

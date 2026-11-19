@@ -29,6 +29,8 @@ export interface IRoomChat {
   uploads: IUploadStatus[];
   reportUpload: (report: IUploadReportInput) => Promise<boolean>;
   getToken: () => string | null;
+  // Info: (20261118 - Luphia) 訂閱原始事件 (文件共筆等)；回傳取消訂閱
+  subscribe: (listener: (event: TChatEvent) => void) => () => void;
   // Info: (20261106 - Luphia) 通話人數 (由伺服器推送；尚未收到時為 null)
   callParticipants: number | null;
 }
@@ -86,6 +88,7 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
   }, [onFile, onFileRemoved, onRoomSettings, onUploadComplete]);
 
   const tokenRef = useRef<string | null>(null);
+  const listenersRef = useRef(new Set<(event: TChatEvent) => void>());
   const passwordRef = useRef(password);
   useEffect(() => {
     passwordRef.current = password;
@@ -113,6 +116,13 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
     };
 
     const handleEvent = (event: TChatEvent) => {
+      listenersRef.current.forEach(listener => {
+        try {
+          listener(event);
+        } catch (err) {
+          console.error('[Chat] listener failed:', err);
+        }
+      });
       if (event.type === 'ready') {
         attempts = 0;
         myId = event.me.memberId;
@@ -297,12 +307,19 @@ export function useRoomChat({ roomId, password, enabled, onFile, onFileRemoved, 
   );
 
   const getToken = useCallback(() => tokenRef.current, []);
+  const subscribe = useCallback((listener: (event: TChatEvent) => void) => {
+    listenersRef.current.add(listener);
+    return () => {
+      listenersRef.current.delete(listener);
+    };
+  }, []);
 
   return {
     status: enabled && roomId && status === 'idle' ? 'connecting' : status,
     uploads: Object.values(uploads).sort((a, b) => a.startedAt - b.startedAt),
     reportUpload,
     getToken,
+    subscribe,
     callParticipants,
     me,
     online,

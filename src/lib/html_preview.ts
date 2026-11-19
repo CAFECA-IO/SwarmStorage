@@ -73,7 +73,7 @@ const blobToDataUrl = (blob: Blob): Promise<string> =>
     reader.readAsDataURL(blob);
   });
 
-const dirOf = (filename?: string) => (filename && filename.includes('/') ? filename.slice(0, filename.lastIndexOf('/')) : '');
+export const dirOf = (filename?: string) => (filename && filename.includes('/') ? filename.slice(0, filename.lastIndexOf('/')) : '');
 
 // Info: (20261108 - Luphia) 依所在資料夾解析相對路徑 (支援 ./ 與 ../，不可超出房間根目錄)
 const resolveRelative = (baseDir: string, ref: string): string | null => {
@@ -94,7 +94,7 @@ const resolveRelative = (baseDir: string, ref: string): string | null => {
  * Info: (20261108 - Luphia) 依引用文件所在的資料夾解析 (資料夾上傳的網站可完整預覽)；
  * 房間根目錄的文件仍可只以檔名比對 (相容沒有資料夾的舊房間)
  */
-const matchRoomFile = (ref: string | null, roomFiles: Set<string>, baseDir = ''): string | null => {
+export const matchRoomFile = (ref: string | null, roomFiles: Set<string>, baseDir = ''): string | null => {
   if (!ref) return null;
   const trimmed = ref.trim();
   if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('/') || /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {

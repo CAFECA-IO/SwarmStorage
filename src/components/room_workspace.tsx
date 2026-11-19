@@ -27,6 +27,8 @@ import FilePreviewPane, { type IFileLoadState, type TViewMode } from '@/componen
 import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
 import RoomActivity from '@/components/room_activity';
+import dynamic from 'next/dynamic';
+import { isDocument, NEW_DOC_TEMPLATE } from '@/lib/doc_settings';
 import RoomSettingsPanel from '@/components/room_settings_panel';
 import AccountButton from '@/components/account_button';
 import type { IFileAction } from '@/components/file_actions_menu';
@@ -101,6 +103,12 @@ const saveBlob = (blob: Blob, filename: string) => {
  * - 中：分頁、路徑 / 頁內搜尋 / 檢視模式工具列、預覽
  * - 右：檔案資訊、儲存健康度、預覽安全開關
  */
+// Info: (20261118 - Luphia) 文件編輯器 (含 KaTeX / mermaid / remark) 只在開啟時載入
+const DocEditor = dynamic(() => import('@/components/doc_editor'), {
+  ssr: false,
+  loading: () => <div className="flex flex-1 items-center justify-center font-mono text-sm text-slate-400 animate-pulse">Opening editor…</div>,
+});
+
 export default function RoomWorkspace({ roomId, initialPassword, initialFile, onExit }: IRoomWorkspaceProps) {
   const [files, setFiles] = useState<ILariaMetadata[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -135,6 +143,9 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   // Info: (20261108 - Luphia) 資料夾 (C 方案)：瀏覽中的資料夾、待確認的資料夾上傳、打包下載進度
   const [browse, setBrowse] = useState<{ path: string; selected: string | null } | null>(null);
+  // Info: (20261118 - Luphia) 文件編輯器：開啟中的文件 (id 固定，另存副本時只換檔名)；新文件命名對話框
+  const [doc, setDoc] = useState<{ id: number; filename: string; initial: string | null } | null>(null);
+  const [newDocAsk, setNewDocAsk] = useState<{ name: string; error: string | null } | null>(null);
   const [pendingDrop, setPendingDrop] = useState<{
     entries: IPathedFile[];
     folders: { name: string; original: string; count: number; size: number }[];
@@ -182,8 +193,11 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     const metadata = raw as unknown as ILariaMetadata;
     if (typeof metadata.filename !== 'string' || !Array.isArray(metadata.shards)) return;
     const name = metadata.filename;
+    // Info: (20261118 - Luphia) 文件存檔不帶 uploadId：內容 (分片) 改變時也要清除快取
+    const previous = filesRef.current.find(f => f.filename === name);
+    const changed = !!previous && previous.shards.join(',') !== metadata.shards.join(',');
 
-    if (uploadId) {
+    if (uploadId || changed) {
       blobPromises.current.delete(name);
       setLoads(prev => {
         const next = { ...prev };
@@ -195,7 +209,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         delete next[name];
         return next;
       });
-      setNewFiles(prev => ({ ...prev, [name]: Date.now() }));
+      if (uploadId) setNewFiles(prev => ({ ...prev, [name]: Date.now() }));
     }
 
     const list = [...filesRef.current.filter(f => f.filename !== name), metadata].sort((a, b) => a.filename.localeCompare(b.filename));
@@ -203,7 +217,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     setFiles(list);
 
     // Info: (20261105 - Luphia) 正在檢視的檔案被重新上傳：載入新版本
-    if (uploadId && activeNameRef.current === name) loadBlob(name).catch(() => undefined);
+    if ((uploadId || changed) && activeNameRef.current === name) loadBlob(name).catch(() => undefined);
 
     if (uploadId && watchingRef.current.has(uploadId)) {
       setWatching(prev => {
@@ -411,6 +425,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       if (!meta) return;
       // Info: (20261105 - Luphia) 沒有開啟檔案時側欄顯示聊天；開啟檔案後切到 Details，視為已讀
       if (!activeNameRef.current) setSeenMessages(othersCountRef.current);
+      setDoc(null);
       setOpenTabs(prev => (prev.includes(name) ? prev : [...prev, name]));
       setCallOpen(false);
       setActiveName(name);
@@ -749,6 +764,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
 
   const getFileActions = (file: ILariaMetadata): IFileAction[] => {
     const actions: IFileAction[] = [{ label: 'Open', onSelect: () => openFile(file.filename) }];
+    if (isDocument(file.filename)) actions.push({ label: 'Open in editor', onSelect: () => openDoc(file.filename) });
     if (isDownloadAllowed(file)) actions.push({ label: 'Download', onSelect: () => handleDownload(file.filename) });
     actions.push({ label: 'Copy link', onSelect: () => handleCopyLink(file.filename) });
     if (canManageFile(file)) {
@@ -760,6 +776,28 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       actions.push({ label: 'Delete from room', onSelect: () => handleDelete(file.filename), danger: true });
     }
     return actions;
+  };
+
+  // Info: (20261118 - Luphia) 文件編輯器
+  const docSeq = useRef(0);
+  const openDoc = (filename: string, initial: string | null = null) => {
+    docSeq.current += 1;
+    setCallOpen(false);
+    setNavOpen(false);
+    setDoc({ id: docSeq.current, filename, initial });
+  };
+  const createDocument = () => {
+    if (!newDocAsk) return;
+    const raw = newDocAsk.name.trim().replace(/\.(md|markdown)$/i, '');
+    if (!raw || raw.includes('/') || raw.startsWith('.') || /[\\\u0000-\u001f]/.test(raw) || raw.length > 200) {
+      setNewDocAsk({ ...newDocAsk, error: 'Use a name without / or \\, not starting with a dot.' });
+      return;
+    }
+    const taken = new Set((files || []).map(f => f.filename));
+    let filename = `${raw}.md`;
+    for (let i = 2; taken.has(filename); i++) filename = `${raw} (${i}).md`;
+    setNewDocAsk(null);
+    openDoc(filename, NEW_DOC_TEMPLATE(raw));
   };
 
   const getFolderActions = (path: string): IFileAction[] => {
@@ -1196,6 +1234,22 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         </div>
       );
     }
+    if (doc) {
+      return (
+        <DocEditor
+          key={doc.id}
+          roomId={roomId}
+          password={chatPassword}
+          filename={doc.filename}
+          createSource={doc.initial}
+          chat={chat}
+          resolver={resolver}
+          onClose={() => setDoc(null)}
+          onUploadPdf={(file, path) => uploadFiles([{ file, path }])}
+          onToast={(message, tone) => pushToast({ message, tone }, 6000)}
+        />
+      );
+    }
     if (!activeFile) {
       return (
         <RoomActivity
@@ -1212,6 +1266,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           browse={browse}
           onBrowse={(path, selected = null) => setBrowse(path ? { path, selected } : null)}
           onUploadFolder={() => folderInputRef.current?.click()}
+          onNewDocument={() => setNewDocAsk({ name: 'Untitled', error: null })}
           onDownloadFolder={handleDownloadFolder}
           onDownloadFile={handleDownload}
           folderActions={getFolderActions}
@@ -1318,6 +1373,15 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
             </div>
           )}
 
+          {isDocument(activeFile.filename) && (
+            <button
+              type="button"
+              onClick={() => openDoc(activeFile.filename)}
+              className="h-9 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-500"
+            >
+              Open in editor
+            </button>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -1664,6 +1728,50 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               </div>
             );
           })}
+        </div>
+      )}
+
+      {newDocAsk && (
+        <div className="fixed inset-x-0 top-viewport z-50 flex h-viewport items-center justify-center bg-black/70 p-4">
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-doc-title"
+            onSubmit={e => {
+              e.preventDefault();
+              createDocument();
+            }}
+            className="flex w-full max-w-md flex-col gap-3 rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-2xl"
+          >
+            <h2 id="new-doc-title" className="text-lg font-bold text-slate-100">
+              New document
+            </h2>
+            <label htmlFor="new-doc-name" className="text-[13px] font-semibold text-slate-300">
+              Name
+            </label>
+            <div className="flex items-center gap-2">
+              <input
+                id="new-doc-name"
+                aria-label="Document name"
+                value={newDocAsk.name}
+                onChange={e => setNewDocAsk({ name: e.target.value, error: null })}
+                onFocus={e => e.target.select()}
+                autoComplete="off"
+                className="h-11 min-w-0 flex-1 rounded-xl border border-white/10 bg-black/40 px-3 text-[15px] text-white outline-none focus:border-blue-500"
+              />
+              <span className="font-mono text-sm text-slate-400">.md</span>
+            </div>
+            {newDocAsk.error && <p className="text-xs text-red-300">{newDocAsk.error}</p>}
+            <p className="text-xs leading-5 text-slate-400">Saved to this room as Markdown. Write equations, Mermaid diagrams and tables, then download it as a PDF.</p>
+            <div className="flex justify-end gap-2">
+              <button type="button" onClick={() => setNewDocAsk(null)} className="h-10 rounded-xl border border-white/10 px-4 text-[13px] font-semibold text-slate-300 hover:bg-white/5">
+                Cancel
+              </button>
+              <button type="submit" className="h-10 rounded-xl bg-blue-600 px-4 text-[13px] font-semibold text-white hover:bg-blue-500">
+                Create
+              </button>
+            </div>
+          </form>
         </div>
       )}
 

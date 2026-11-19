@@ -14,6 +14,7 @@ import type { Root as MdastRoot, RootContent, Parent as MdastParent } from 'mdas
 import type { Root as HastRoot, Element as HastElement, ElementContent } from 'hast';
 // Info: (20261106 - Luphia) 化學式 \ce{…} 與單位 \pu{…} (註冊到 rehype-katex 共用的 katex)
 import 'katex/contrib/mhchem';
+import { renderMermaid, type MermaidConfig } from '@/lib/mermaid_runner';
 
 /**
  * Info: (20261106 - Luphia)
@@ -128,14 +129,8 @@ function rehypeScientificTables() {
   return (tree: HastRoot) => visit(tree);
 }
 
-type TMermaid = (typeof import('mermaid'))['default'];
-let mermaidPromise: Promise<TMermaid> | null = null;
-
-const loadMermaid = (): Promise<TMermaid> => {
-  if (!mermaidPromise) {
-    mermaidPromise = import('mermaid').then(module => {
-      const mermaid = module.default;
-      mermaid.initialize({
+// Info: (20261118 - Luphia) 介面深色主題；文件編輯器使用淺色主題 (共用 mermaid_runner，逐一繪製)
+const DARK_MERMAID_CONFIG: MermaidConfig = {
         startOnLoad: false,
         securityLevel: 'strict',
         // Info: (20261106 - Luphia) 深色主題，配色與 DropHere 介面一致 (slate 底、blue 主色)
@@ -190,14 +185,8 @@ const loadMermaid = (): Promise<TMermaid> => {
           },
         },
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
-      });
-      return mermaid;
-    });
-  }
-  return mermaidPromise;
-};
+      };
 
-let renderCounter = 0;
 
 const KATEX_BASE = '/vendor/katex/';
 let katexCssPromise: Promise<string> | null = null;
@@ -214,7 +203,7 @@ const blobToDataUrl = (blob: Blob): Promise<string> =>
  * Info: (20261106 - Luphia)
  * 取得 KaTeX 樣式並把 woff2 字型轉為 data: URI (只做一次)
  */
-const loadKatexCss = (): Promise<string> => {
+export const loadKatexCss = (): Promise<string> => {
   if (!katexCssPromise) {
     katexCssPromise = (async () => {
       const res = await fetch(`${KATEX_BASE}katex.min.css`);
@@ -247,25 +236,17 @@ const MATH_HINT = /\$|```\s*math|\\\(|\\\[/;
 
 async function renderDiagrams(diagrams: string[]): Promise<{ svgs: string[]; errors: number }> {
   if (diagrams.length === 0) return { svgs: [], errors: 0 };
-  const mermaid = await loadMermaid();
   const svgs: string[] = [];
   let errors = 0;
-  // Info: (20261106 - Luphia) mermaid 不支援並行繪製，逐一處理
   for (const code of diagrams) {
-    const id = `dh-mermaid-${Date.now().toString(36)}-${renderCounter++}`;
-    try {
-      const { svg } = await mermaid.render(id, code);
-      svgs.push(`<figure class="md-mermaid">${svg}</figure>`);
-    } catch (err) {
+    const result = await renderMermaid(code, DARK_MERMAID_CONFIG);
+    if (result.ok) {
+      svgs.push(`<figure class="md-mermaid">${result.svg}</figure>`);
+    } else {
       errors++;
-      const message = err instanceof Error ? err.message : String(err);
       svgs.push(
-        `<div class="md-mermaid-error"><p><strong>Mermaid diagram could not be rendered</strong></p><pre>${escapeHtml(message)}</pre><pre><code>${escapeHtml(code)}</code></pre></div>`
+        `<div class="md-mermaid-error"><p><strong>Mermaid diagram could not be rendered</strong></p><pre>${escapeHtml(result.error)}</pre><pre><code>${escapeHtml(code)}</code></pre></div>`
       );
-    } finally {
-      // Info: (20261106 - Luphia) 清除 mermaid 失敗時留在主頁面的暫存節點
-      document.getElementById(id)?.remove();
-      document.getElementById(`d${id}`)?.remove();
     }
   }
   return { svgs, errors };

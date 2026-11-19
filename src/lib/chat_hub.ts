@@ -71,6 +71,8 @@ export type TChatEvent =
   | { type: 'message'; message: IChatMessage }
   | { type: 'presence'; action: 'join' | 'leave'; member: IChatMember; online: number }
   | { type: 'expired' }
+  // Info: (20261118 - Luphia) 文件共筆 (doc_hub)：payload 依 kind 區分
+  | { type: 'doc'; filename: string; payload: Record<string, unknown> }
   | { type: 'error'; message: string };
 
 interface IChatToken extends IChatMember {
@@ -145,6 +147,19 @@ const broadcast = (roomId: string, event: TChatEvent) => {
     }
   });
 };
+
+// Info: (20261118 - Luphia) 供其他模組 (文件共筆) 推送事件給房間內所有人
+export const broadcastRoomEvent = (roomId: string, event: TChatEvent) => broadcast(roomId, event);
+
+// Info: (20261118 - Luphia) 線上成員與其身分雜湊 (指派章節負責人時，把聊天成員對應到固定的身分)
+export function onlineIdentities(roomId: string): (IChatMember & { memberHash: string | null })[] {
+  const seen = new Map<string, IChatMember & { memberHash: string | null }>();
+  state.rooms.get(roomId)?.forEach(conn => {
+    const token = state.tokens.get(conn.token);
+    if (token && !seen.has(token.memberId)) seen.set(token.memberId, { memberId: token.memberId, nickname: token.nickname, memberHash: token.memberHash });
+  });
+  return [...seen.values()];
+}
 
 /**
  * Info: (20261105 - Luphia)
