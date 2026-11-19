@@ -4,10 +4,9 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
-import { isRoomOwner, isValidRoomId, memberHashFromRequest, readRoomConfig } from '@/lib/room_access';
+import { ROOM_BASE_DIR, isRoomOwner, isValidRoomId, memberHashFromRequest, readRoomConfig } from '@/lib/room_access';
 import { updateRoomTokenExpiry } from '@/lib/chat_hub';
 
-const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
 
 /**
  * Info: (20261105 - Luphia) 處理 GET /api/v1/room/[room_id]/expiration

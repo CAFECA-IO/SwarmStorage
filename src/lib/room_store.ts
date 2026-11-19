@@ -15,6 +15,7 @@ import {
 import { endCall } from '@/lib/call_service';
 import { announceFile, announceFileRemoved, closeRoom, onlineCount, uploadingCount } from '@/lib/chat_hub';
 import { notifyDocChangedElsewhere } from '@/lib/doc_invalidate';
+import { IPFS_API_URL } from '@/lib/server_env';
 import { DATA_SHARDS, PARITY_SHARDS, SHARD_SIZE, decodeShards, encodeShards } from '@/lib/doc_codec';
 
 /**
@@ -22,7 +23,6 @@ import { DATA_SHARDS, PARITY_SHARDS, SHARD_SIZE, decodeShards, encodeShards } fr
  * 房間資料存取 (伺服器端)：建立房間、房間清單、檔案 metadata、刪除 (可復原) 與清理
  */
 
-const IPFS_API_URL = 'http://127.0.0.1:5001';
 const TRASH_DIR = '.trash';
 // Info: (20261106 - Luphia) 刪除後可復原的時間
 export const DELETE_UNDO_MS = 10 * 1000;

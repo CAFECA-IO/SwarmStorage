@@ -2,8 +2,8 @@
 import { NextRequest } from 'next/server';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
+import { IPFS_API_URL } from '@/lib/server_env';
 
-const IPFS_API_URL = 'http://127.0.0.1:5001';
 const IPFS_TIMEOUT_MS = 120 * 1000;
 
 // Info: (20251022 - Luphia) CORS 標頭

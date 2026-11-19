@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { accountMemberHash, sessionFromHeaders } from '@/lib/auth_session';
 import { keccak256, toUtf8Bytes } from 'ethers';
 import { ApiCode } from '@/lib/status';
+import { ROOM_DATA_DIR } from '@/lib/server_env';
 
 /**
  * Info: (20261105 - Luphia)
@@ -11,7 +12,8 @@ import { ApiCode } from '@/lib/status';
  * Info: (20261106 - Luphia) 加入房間設定 (名稱、公開、上傳權限) 與成員身分 (瀏覽器金鑰的雜湊)
  */
 
-export const ROOM_BASE_DIR = path.join(process.cwd(), 'room');
+// Info: (20261119 - Luphia) 房間資料目錄可由 ROOM_DATA_DIR 指定 (容器部署時掛 volume)
+export const ROOM_BASE_DIR = ROOM_DATA_DIR;
 
 export type TUploadPolicy = 'owner' | 'everyone';
 

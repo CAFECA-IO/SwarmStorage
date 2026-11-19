@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'fs';
 import path from 'path';
+import { DROPHERE_DATA_DIR } from '@/lib/server_env';
 
 /**
  * Info: (20261108 - Luphia)
@@ -12,7 +13,8 @@ import path from 'path';
 
 export const SESSION_COOKIE = 'drophere_session';
 export const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60;
-const SECRET_FILE = path.join(process.cwd(), '.drophere', 'session.key');
+// Info: (20261119 - Luphia) 未設定 SESSION_SECRET 時自動產生的金鑰；目錄可由 DROPHERE_DATA_DIR 指定 (需持久化)
+const SECRET_FILE = path.join(DROPHERE_DATA_DIR, 'session.key');
 
 export interface ISession {
   // Info: (20261108 - Luphia) 身分合約地址 (小寫)，就是使用者在 DropHere 的唯一 ID
