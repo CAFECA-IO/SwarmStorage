@@ -25,7 +25,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
 /**
  * Info: (20261118 - Luphia)
  * POST /api/v1/room/[room_id]/pdf：把文件 HTML 轉成 PDF (房間成員才能使用)
- * body: { html, title, pageNumbers, margin }；回傳 application/pdf
+ * body: { html, title }；回傳 application/pdf (不加頁首頁尾)
  * 伺服器沒有 Chrome / Chromium 時回傳 501，前端改用瀏覽器列印
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ room_id: string }> }) {
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   const length = Number(request.headers.get('content-length') || 0);
   if (length > MAX_HTML_BYTES) return jsonFail(ApiCode.VALIDATION_ERROR, 'Document is too large to turn into a PDF');
-  let body: { html?: unknown; title?: unknown; pageNumbers?: unknown; margin?: unknown };
+  let body: { html?: unknown; title?: unknown };
   try {
     const text = await request.text();
     if (text.length > MAX_HTML_BYTES) return jsonFail(ApiCode.VALIDATION_ERROR, 'Document is too large to turn into a PDF');
@@ -52,11 +52,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid request');
   }
   if (typeof body.html !== 'string' || !body.html.startsWith('<!doctype html>')) return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid document');
-  const title = typeof body.title === 'string' ? body.title.slice(0, 200) : 'Document';
 
   try {
-    const margin = typeof body.margin === 'string' && /^\d{1,2}mm$/.test(body.margin) ? body.margin : '20mm';
-    const pdf = await renderPdf({ html: body.html, title, pageNumbers: body.pageNumbers !== false, margin });
+    const pdf = await renderPdf({ html: body.html });
     return new Response(new Uint8Array(pdf), { headers: { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-store' } });
   } catch (err) {
     console.error('[PDF] render failed:', err);

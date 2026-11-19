@@ -184,41 +184,47 @@ export async function renderMathPreview(tex: string): Promise<{ html: string; er
   }
 }
 
-const SERIF = '"Noto Serif TC", "Source Han Serif TC", "Songti TC", Georgia, "Times New Roman", serif';
-const SANS = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", Helvetica, Arial, sans-serif';
+const SERIF = 'Georgia, "Noto Serif TC", "Noto Serif CJK TC", "Source Han Serif TC", "Songti TC", "Times New Roman", serif';
+const SANS = 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans TC", "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", Helvetica, Arial, sans-serif';
 const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace';
 
 /**
  * Info: (20261118 - Luphia)
- * 文件樣式 (編輯器的白色頁面與 PDF 共用)：主題色、標題色塊、數學式編號、表格、程式碼
+ * 文件樣式 (編輯器的白色頁面與 PDF 共用，所見即所得)：主題色、三種版面風格、數學式編號、表格、程式碼
  * 樣式都限定在 .dh-doc 之下，不影響介面
  */
 export function docCss(settings: IDocSettings): string {
   const theme = DOC_THEMES[settings.theme];
-  const heading =
-    settings.headings === 'numbered'
-      ? `.dh-doc h2{counter-increment:dh-h2}
-.dh-doc h2::before{content:counter(dh-h2);flex:none;display:inline-flex;align-items:center;justify-content:center;width:1.55em;height:1.55em;border-radius:.32em;background:var(--dh-accent);color:#fff;font-size:.82em;font-weight:700}
-.dh-doc h3::before{content:"";flex:none;width:.5em;height:.5em;border-radius:.12em;background:var(--dh-accent)}`
-      : settings.headings === 'bar'
-        ? `.dh-doc h2::before{content:"";flex:none;width:.32em;height:1.15em;border-radius:.1em;background:var(--dh-accent)}
-.dh-doc h3::before{content:"";flex:none;width:.22em;height:1em;border-radius:.1em;background:var(--dh-accent)}`
-        : '';
+  // Info: (20261119 - Luphia) 三種版面風格；標題一律不編號
+  const styles: Record<IDocSettings['style'], string> = {
+    block: `.dh-doc h1{margin:0 0 1.6em;padding:1.1em 1.3em 1em;border-radius:10px;background:var(--dh-soft);box-shadow:inset .5em 0 0 var(--dh-accent);font-size:2em;font-weight:800;letter-spacing:-.01em}
+.dh-doc h2{display:flex;align-items:center;gap:.5em;margin:1.9em 0 .7em;font-size:1.32em;font-weight:700}
+.dh-doc h2::before{content:"";flex:none;width:.62em;height:.62em;border-radius:.14em;background:var(--dh-accent)}
+.dh-doc h3{display:flex;align-items:center;gap:.45em;margin:1.5em 0 .55em;font-size:1.1em;font-weight:700}
+.dh-doc h3::before{content:"";flex:none;width:.4em;height:.4em;border-radius:.1em;background:var(--dh-accent);opacity:.7}`,
+    ribbon: `.dh-doc h1{margin:0 0 1.6em;padding:1em 1.2em;border-radius:6px;background:var(--dh-accent);color:#fff;font-size:1.95em;font-weight:800;letter-spacing:-.01em}
+.dh-doc h2{display:flex;align-items:center;gap:.55em;margin:1.8em 0 .8em;padding:.42em .7em;border-radius:6px;background:var(--dh-soft);font-size:1.22em;font-weight:700}
+.dh-doc h2::before{content:"";flex:none;width:.3em;height:1.1em;border-radius:.08em;background:var(--dh-accent)}
+.dh-doc h3{margin:1.5em 0 .55em;padding-bottom:.25em;border-bottom:2px solid var(--dh-soft);color:var(--dh-accent);font-size:1.08em;font-weight:700}`,
+    editorial: `.dh-doc h1{margin:0 0 1.5em;padding-bottom:.55em;font-family:${SERIF};font-size:2.3em;font-weight:700;letter-spacing:-.015em;line-height:1.15}
+.dh-doc h1::after{content:"";display:block;width:3.2em;height:.16em;margin-top:.45em;border-radius:.08em;background:var(--dh-accent)}
+.dh-doc h2{margin:2em 0 .65em;font-family:${SERIF};font-size:1.42em;font-weight:700}
+.dh-doc h2::before{content:"";display:block;width:1.9em;height:.26em;margin-bottom:.55em;border-radius:.13em;background:var(--dh-accent)}
+.dh-doc h3{margin:1.5em 0 .5em;font-family:${SERIF};font-style:italic;font-size:1.12em;font-weight:600;color:var(--dh-accent)}
+.dh-doc blockquote{background:none;border:0;border-left:3px solid var(--dh-accent);padding:.2em 1.2em;font-style:italic;color:#374151;border-radius:0}`,
+  };
+  const heading = styles[settings.style] ?? styles.block;
   const equationNumbers = settings.equationNumbers
     ? `.dh-doc .katex-display{position:relative;padding-right:3em}
 .dh-doc .katex-display::after{counter-increment:dh-eq;content:"(" counter(dh-eq) ")";position:absolute;right:0;top:50%;transform:translateY(-50%);font:.85em ${SANS};color:#6B7280}`
     : '';
   return `
-.dh-doc{--dh-accent:${theme.accent};--dh-soft:${theme.soft};--dh-ink:${theme.ink};counter-reset:dh-h2 dh-eq;color:#1F2937;font-family:${settings.font === 'serif' ? SERIF : SANS};font-size:15px;line-height:1.72;word-wrap:break-word}
+.dh-doc{--dh-accent:${theme.accent};--dh-soft:${theme.soft};--dh-ink:${theme.ink};counter-reset:dh-eq;color:#1F2937;font-family:${settings.font === 'serif' ? SERIF : SANS};font-size:10.5pt;line-height:1.72;word-wrap:break-word}
 .dh-doc *{box-sizing:border-box}
 .dh-doc>*:first-child,.dh-doc .dh-block:first-child>*:first-child{margin-top:0}
 .dh-doc h1,.dh-doc h2,.dh-doc h3,.dh-doc h4{font-family:${SANS};color:var(--dh-ink);line-height:1.25;break-after:avoid}
-.dh-doc h1{margin:0 0 22px;padding:22px 26px 20px;border-radius:10px;background:var(--dh-soft);box-shadow:inset 10px 0 0 var(--dh-accent);font-size:1.95em;font-weight:800;letter-spacing:-.01em}
-.dh-doc h2{display:flex;align-items:center;gap:.55em;margin:28px 0 12px;font-size:1.32em;font-weight:700}
-.dh-doc h3{display:flex;align-items:center;gap:.5em;margin:22px 0 10px;font-size:1.1em;font-weight:700}
-.dh-doc h4{margin:18px 0 8px;font-size:1em}
-${heading}
-.dh-doc p,.dh-doc ul,.dh-doc ol,.dh-doc blockquote,.dh-doc pre,.dh-doc table,.dh-doc figure{margin:0 0 14px}
+.dh-doc h4{margin:1.3em 0 .5em;font-size:1em}
+.dh-doc p,.dh-doc ul,.dh-doc ol,.dh-doc blockquote,.dh-doc pre,.dh-doc table,.dh-doc figure{margin:0 0 1em}
 .dh-doc a{color:var(--dh-accent);text-decoration:underline;text-underline-offset:2px}
 .dh-doc strong{color:#111827}
 .dh-doc ul,.dh-doc ol{padding-left:1.5em}
@@ -239,6 +245,7 @@ ${heading}
 .dh-doc .katex{font-size:1.08em}
 .dh-doc .katex-display{margin:6px 0 16px;overflow-x:auto;overflow-y:hidden;break-inside:avoid}
 ${equationNumbers}
+${heading}
 .dh-doc .dh-mermaid{display:flex;justify-content:center;margin:6px 0 16px;break-inside:avoid}
 .dh-doc .dh-mermaid svg{max-width:100%;height:auto}
 .dh-doc .dh-error{padding:10px 12px;border-radius:8px;border:1px solid #FCA5A5;background:#FEF2F2;color:#991B1B;font:13px ${SANS}}
@@ -306,9 +313,8 @@ export async function renderDocumentHtml(
   const page = settings.paper === 'letter' ? 'Letter' : 'A4';
   const margin = MARGIN_SIZES[settings.margins];
   const css = `${docCss(settings)}
-@page{size:${page};margin:${margin} ${margin} ${settings.pageNumbers ? `calc(${margin} + 6mm)` : margin}}
+@page{size:${page};margin:${margin}}
 html,body{margin:0;background:#fff}
-.dh-doc{font-size:10.5pt}
 .dh-doc .dh-pagebreak{break-after:page;border:0;margin:0}
 .dh-doc .dh-pagebreak::after{content:none}
 .dh-doc .dh-cover{min-height:220mm;display:flex;flex-direction:column;justify-content:center;break-after:page}

@@ -9,18 +9,18 @@
  */
 
 export type TDocTheme = 'blue' | 'teal' | 'amber' | 'mono';
-export type THeadingStyle = 'numbered' | 'bar' | 'plain';
+// Info: (20261119 - Luphia) 版面風格：色塊、色帶、編輯 (標題不編號)
+export type TDocStyle = 'block' | 'ribbon' | 'editorial';
 export type TPaper = 'a4' | 'letter';
 export type TMargins = 'normal' | 'narrow';
 export type TDocFont = 'serif' | 'sans';
 
 export interface IDocSettings {
   theme: TDocTheme;
-  headings: THeadingStyle;
+  style: TDocStyle;
   paper: TPaper;
   margins: TMargins;
   font: TDocFont;
-  pageNumbers: boolean;
   toc: boolean;
   titlePage: boolean;
   equationNumbers: boolean;
@@ -28,14 +28,13 @@ export interface IDocSettings {
 
 export const DEFAULT_DOC_SETTINGS: IDocSettings = {
   theme: 'blue',
-  headings: 'numbered',
+  style: 'block',
   paper: 'a4',
   margins: 'normal',
   font: 'serif',
-  pageNumbers: true,
   toc: false,
   titlePage: false,
-  equationNumbers: true,
+  equationNumbers: false,
 };
 
 // Info: (20261118 - Luphia) 主色 (色塊)、淺色 (封面底、表頭)、深色文字；文字與色塊對比皆 ≥ 4.5:1
@@ -46,16 +45,23 @@ export const DOC_THEMES: Record<TDocTheme, { label: string; accent: string; soft
   mono: { label: 'Mono', accent: '#1F2937', soft: '#F3F4F6', ink: '#030712' },
 };
 
+export const DOC_STYLES: Record<TDocStyle, { label: string; hint: string }> = {
+  block: { label: 'Color block', hint: 'Title in a tinted band, a color square before each heading' },
+  ribbon: { label: 'Ribbon', hint: 'Solid title bar, headings on a tinted ribbon' },
+  editorial: { label: 'Editorial', hint: 'Large title with a rule, quiet headings with an accent mark' },
+};
+
 export const PAPER_LABELS: Record<TPaper, string> = { a4: 'A4', letter: 'Letter' };
+// Info: (20261119 - Luphia) 編輯器頁面寬度與紙張相同 (所見即所得)
+export const PAPER_WIDTHS: Record<TPaper, string> = { a4: '210mm', letter: '8.5in' };
 export const MARGIN_SIZES: Record<TMargins, string> = { normal: '22mm', narrow: '14mm' };
 
 const KEYS: { [K in keyof IDocSettings]: string } = {
   theme: 'pdf-theme',
-  headings: 'pdf-headings',
+  style: 'pdf-style',
   paper: 'pdf-paper',
   margins: 'pdf-margins',
   font: 'pdf-font',
-  pageNumbers: 'pdf-page-numbers',
   toc: 'pdf-toc',
   titlePage: 'pdf-title-page',
   equationNumbers: 'pdf-equation-numbers',
@@ -63,7 +69,7 @@ const KEYS: { [K in keyof IDocSettings]: string } = {
 
 const CHOICES: Partial<Record<keyof IDocSettings, readonly string[]>> = {
   theme: Object.keys(DOC_THEMES),
-  headings: ['numbered', 'bar', 'plain'],
+  style: ['block', 'ribbon', 'editorial'],
   paper: ['a4', 'letter'],
   margins: ['normal', 'narrow'],
   font: ['serif', 'sans'],
@@ -114,7 +120,8 @@ export function readDocSettings(source: string): IDocSettings {
  */
 export function writeDocSettings(source: string, settings: IDocSettings): string {
   const { front, body } = splitFrontMatter(source);
-  const managed = new Set(Object.values(KEYS));
+  // Info: (20261119 - Luphia) 舊版欄位 (標題編號、頁碼) 一併移除
+  const managed = new Set([...Object.values(KEYS), 'pdf-headings', 'pdf-page-numbers']);
   const kept = (front ?? '').split(/\r?\n/).filter(line => {
     const match = /^([A-Za-z0-9_-]+)\s*:/.exec(line);
     return line.trim() !== '' && !(match && managed.has(match[1]));

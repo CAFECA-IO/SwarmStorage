@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { IRoomFileResolver } from '@/lib/html_preview';
 import { dirOf, matchRoomFile } from '@/lib/html_preview';
-import { DOC_THEMES, MARGIN_SIZES, PAPER_LABELS, joinFrontMatter, readDocSettings, splitFrontMatter, writeDocSettings, type IDocSettings, type TDocTheme } from '@/lib/doc_settings';
+import { DOC_STYLES, DOC_THEMES, MARGIN_SIZES, PAPER_LABELS, PAPER_WIDTHS, type TDocStyle, joinFrontMatter, readDocSettings, splitFrontMatter, writeDocSettings, type IDocSettings, type TDocTheme } from '@/lib/doc_settings';
 import { docCss, joinBlocks, renderBlock, renderDiagram, renderDocumentHtml, renderMathPreview, type IDocAssetResolver } from '@/lib/doc_render';
 import { pdfNameFor, printDocument, requestPdf } from '@/lib/doc_store';
 import { getFileKind } from '@/lib/file_types';
@@ -161,6 +161,42 @@ type TPanel = 'sections' | 'comments' | 'history' | 'pdf';
  * - 空白行輸入 / 插入數學式、Mermaid、表格、房間圖片；數學式與圖表即時預覽
  * - PDF：主題色、標題色塊、紙張、字體、邊界、頁碼、目錄、封面頁、數學式編號 (存在文件 front matter)
  */
+// Info: (20261119 - Luphia) 版面風格的小示意圖
+function StyleThumb({ style, accent, soft }: { style: TDocStyle; accent: string; soft: string }) {
+  return (
+    <svg width="44" height="56" viewBox="0 0 44 56" aria-hidden="true" className="shrink-0 rounded-[4px] bg-white">
+      {style === 'block' && (
+        <>
+          <rect x="5" y="5" width="34" height="10" rx="2" fill={soft} />
+          <rect x="5" y="5" width="2.5" height="10" fill={accent} />
+          <rect x="5" y="21" width="4" height="4" rx="1" fill={accent} />
+          <rect x="11" y="22" width="18" height="2.5" rx="1" fill="#334155" />
+        </>
+      )}
+      {style === 'ribbon' && (
+        <>
+          <rect x="5" y="5" width="34" height="10" rx="1.5" fill={accent} />
+          <rect x="5" y="20" width="34" height="6" rx="1.5" fill={soft} />
+          <rect x="7" y="21.5" width="1.6" height="3" fill={accent} />
+          <rect x="10.5" y="22" width="16" height="2" rx="1" fill="#334155" />
+        </>
+      )}
+      {style === 'editorial' && (
+        <>
+          <rect x="5" y="6" width="28" height="5" rx="1" fill="#111827" />
+          <rect x="5" y="13" width="9" height="1.6" rx=".8" fill={accent} />
+          <rect x="5" y="21" width="6" height="1.4" rx=".7" fill={accent} />
+          <rect x="5" y="24" width="20" height="2.5" rx="1" fill="#334155" />
+        </>
+      )}
+      <rect x="5" y="31" width="34" height="1.6" rx=".8" fill="#CBD5E1" />
+      <rect x="5" y="35" width="30" height="1.6" rx=".8" fill="#CBD5E1" />
+      <rect x="5" y="39" width="32" height="1.6" rx=".8" fill="#CBD5E1" />
+      <rect x="5" y="43" width="22" height="1.6" rx=".8" fill="#CBD5E1" />
+    </svg>
+  );
+}
+
 export default function DocEditor({ roomId, password, filename, createSource, chat, resolver, onClose, onUploadPdf, onToast }: IDocEditorProps) {
   const { doc, status, error, saveError, act, refreshMembers } = useDocSession({ roomId, filename, chat, createSource });
   const [editing, setEditing] = useState<IEditing | null>(null);
@@ -200,7 +236,7 @@ export default function DocEditor({ roomId, password, filename, createSource, ch
   const front = optimisticFront && doc && optimisticFront.rev === doc.rev ? optimisticFront.front : (doc?.front ?? null);
   const source = useMemo(() => joinFrontMatter(front, joinBlocks(blocks.map(b => b.text))), [front, blocks]);
   const settings = useMemo(() => readDocSettings(joinFrontMatter(front, '')), [front]);
-  const sKey = `${settings.theme}|${settings.headings}`;
+  const sKey = `${settings.theme}|${settings.style}`;
 
   // Info: (20261118 - Luphia) 章節：## 標題與其下的區塊
   const sectionOfBlock = useMemo(() => {
@@ -519,10 +555,10 @@ export default function DocEditor({ roomId, password, filename, createSource, ch
     setPdfState('building');
     try {
       const { html, title } = await renderDocumentHtml(source, settings, assets, filename.replace(/\.(md|markdown)$/i, ''));
-      const pdf = await requestPdf(roomId, password, html, title, settings.pageNumbers, MARGIN_SIZES[settings.margins]);
+      const pdf = await requestPdf(roomId, password, html, title);
       const pdfName = pdfNameFor(filename);
       if (!pdf) {
-        printDocument(html, title, settings.pageNumbers);
+        printDocument(html, MARGIN_SIZES[settings.margins]);
         onToast('This server cannot create PDF files directly. In the print window, choose “Save as PDF”.', 'info');
         return;
       }
@@ -654,14 +690,24 @@ export default function DocEditor({ roomId, password, filename, createSource, ch
           ))}
         </div>
       </fieldset>
-      <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-300">
-        Headings
-        <select disabled={!canEditAll} value={settings.headings} onChange={e => changeSettings({ headings: e.target.value as IDocSettings['headings'] })} className={inputBase}>
-          <option value="numbered">Numbered color block</option>
-          <option value="bar">Color bar</option>
-          <option value="plain">Plain</option>
-        </select>
-      </label>
+      <fieldset disabled={!canEditAll}>
+        <legend className="mb-2 text-xs font-semibold text-slate-300">Style</legend>
+        <div className="flex flex-col gap-1.5">
+          {(Object.keys(DOC_STYLES) as TDocStyle[]).map(key => (
+            <label
+              key={key}
+              className={`flex cursor-pointer items-center gap-3 rounded-[10px] border p-2.5 ${settings.style === key ? 'border-blue-500 bg-[#0B1530]' : 'border-white/10 hover:bg-white/5'}`}
+            >
+              <input type="radio" name="doc-style" aria-label={DOC_STYLES[key].label} checked={settings.style === key} onChange={() => changeSettings({ style: key })} className="sr-only" />
+              <StyleThumb style={key} accent={DOC_THEMES[settings.theme].accent} soft={DOC_THEMES[settings.theme].soft} />
+              <span className="min-w-0">
+                <span className="block text-[13px] font-semibold text-slate-100">{DOC_STYLES[key].label}</span>
+                <span className="block text-[11px] leading-4 text-slate-400">{DOC_STYLES[key].hint}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
       <fieldset disabled={!canEditAll}>
         <legend className="mb-2 text-xs font-semibold text-slate-300">Paper</legend>
         <div className="grid grid-cols-2 gap-1.5">
@@ -695,7 +741,6 @@ export default function DocEditor({ roomId, password, filename, createSource, ch
       <div className="flex flex-col">
         {(
           [
-            ['pageNumbers', 'Page numbers'],
             ['equationNumbers', 'Number equations'],
             ['toc', 'Table of contents'],
             ['titlePage', 'Title page'],
@@ -1247,7 +1292,8 @@ export default function DocEditor({ roomId, password, filename, createSource, ch
           ) : (
             <article
               aria-label="Document page"
-              className="dh-doc mx-auto min-h-[60vh] max-w-[794px] rounded-[4px] bg-white px-5 py-6 shadow-[0_10px_30px_rgba(0,0,0,0.5)] sm:px-12 sm:py-12 lg:px-16 lg:py-14"
+              className="dh-doc mx-auto min-h-[60vh] rounded-[4px] bg-white px-5 py-6 shadow-[0_10px_30px_rgba(0,0,0,0.5)] sm:p-[var(--dh-margin)]"
+              style={{ maxWidth: PAPER_WIDTHS[settings.paper], ['--dh-margin' as string]: MARGIN_SIZES[settings.margins] }}
             >
               {blocks.map(block => {
                 const isEditing = editing?.id === block.id;

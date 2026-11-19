@@ -100,17 +100,13 @@ const release = () => {
   scheduleClose();
 };
 
-const escapeHtml = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-
 export interface IPdfRequest {
+  // Info: (20261119 - Luphia) 文件標題放在 HTML 的 <title>，會成為 PDF 的標題
   html: string;
-  title: string;
-  pageNumbers: boolean;
-  // Info: (20261118 - Luphia) 頁尾左右對齊頁面邊界
-  margin: string;
 }
 
-export async function renderPdf({ html, title, pageNumbers, margin }: IPdfRequest): Promise<Buffer> {
+// Info: (20261119 - Luphia) 不加頁首頁尾，PDF 與編輯器頁面一致 (所見即所得)
+export async function renderPdf({ html }: IPdfRequest): Promise<Buffer> {
   const path = findChrome();
   if (!path) throw new Error('unavailable');
   await acquire();
@@ -123,13 +119,10 @@ export async function renderPdf({ html, title, pageNumbers, margin }: IPdfReques
       page.setDefaultTimeout(RENDER_TIMEOUT_MS);
       await page.setContent(html, { waitUntil: 'load', timeout: RENDER_TIMEOUT_MS });
       await page.evaluate(() => document.fonts.ready).catch(() => undefined);
-      const footer = `<div style="width:100%;padding:0 ${margin};display:flex;justify-content:space-between;font:8px ui-sans-serif,system-ui,sans-serif;color:#6B7280"><span>${escapeHtml(title)}</span><span><span class="pageNumber"></span> / <span class="totalPages"></span></span></div>`;
       return await page.pdf({
         preferCSSPageSize: true,
         printBackground: true,
-        displayHeaderFooter: pageNumbers,
-        headerTemplate: '<span></span>',
-        footerTemplate: pageNumbers ? footer : '<span></span>',
+        displayHeaderFooter: false,
         tagged: true,
         outline: true,
       });
