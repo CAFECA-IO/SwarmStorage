@@ -337,6 +337,8 @@ interface IRoomActivityProps {
   onDownloadFile: (filename: string) => void;
   folderActions: (path: string) => IFileAction[];
   canDownloadFile: (file: ILariaMetadata) => boolean;
+  // Info: (20261120 - Luphia) PDF 壓縮分割的工作卡片
+  jobs?: React.ReactNode;
 }
 
 /**
@@ -383,6 +385,7 @@ export default function RoomActivity({
   onDownloadFile,
   folderActions,
   canDownloadFile,
+  jobs = null,
 }: IRoomActivityProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const uploading = uploads.filter(u => u.status === 'uploading').length;
@@ -508,6 +511,8 @@ export default function RoomActivity({
             Only the room owner can add files here.
           </p>
         )}
+
+        {jobs}
 
         {(uploads.length > 0 || unfinishedHere.length > 0) && (
           <section aria-labelledby="activity-uploading" className="flex flex-col gap-3">

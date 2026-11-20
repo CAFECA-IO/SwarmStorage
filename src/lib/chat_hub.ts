@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'crypto';
+import type { IPdfFitJob } from '@/lib/pdf_fit_plan';
 
 /**
  * Info: (20261105 - Luphia)
@@ -73,6 +74,8 @@ export type TChatEvent =
   | { type: 'expired' }
   // Info: (20261118 - Luphia) 文件共筆 (doc_hub)：payload 依 kind 區分
   | { type: 'doc'; filename: string; payload: Record<string, unknown> }
+  // Info: (20261120 - Luphia) PDF 壓縮與分割的背景工作 (pdf_fit_jobs)
+  | { type: 'pdf-job'; job: IPdfFitJob }
   | { type: 'error'; message: string };
 
 interface IChatToken extends IChatMember {

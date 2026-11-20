@@ -27,6 +27,11 @@ import FilePreviewPane, { type IFileLoadState, type TViewMode } from '@/componen
 import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
 import RoomActivity from '@/components/room_activity';
+import PdfFitDialog, { defaultFitSettings } from '@/components/pdf_fit_dialog';
+import PdfFitEditor from '@/components/pdf_fit_editor';
+import PdfFitJobCard from '@/components/pdf_fit_job_card';
+import { fetchAnalysis, startFit, stopFit, usePdfFitJobs, type IFitSettings } from '@/lib/pdf_fit_client';
+import type { IPdfAnalysis } from '@/lib/pdf_fit_plan';
 import dynamic from 'next/dynamic';
 import { isDocument, NEW_DOC_TEMPLATE } from '@/lib/doc_settings';
 import RoomSettingsPanel from '@/components/room_settings_panel';
@@ -146,6 +151,16 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   // Info: (20261118 - Luphia) 文件編輯器：開啟中的文件 (id 固定，另存副本時只換檔名)；新文件命名對話框
   const [doc, setDoc] = useState<{ id: number; filename: string; initial: string | null } | null>(null);
   const [newDocAsk, setNewDocAsk] = useState<{ name: string; error: string | null } | null>(null);
+  // Info: (20261120 - Luphia) PDF 符合大小：A 對話框 / B 自訂切點；分析結果與設定在兩個畫面間共用
+  const [fit, setFit] = useState<{
+    filename: string;
+    view: 'dialog' | 'editor';
+    analysis: IPdfAnalysis | null;
+    error: string | null;
+    settings: IFitSettings;
+    touched: boolean;
+  } | null>(null);
+  const [fitStarting, setFitStarting] = useState(false);
   const [pendingDrop, setPendingDrop] = useState<{
     entries: IPathedFile[];
     folders: { name: string; original: string; count: number; size: number }[];
@@ -283,6 +298,26 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   });
   const [callOpen, setCallOpen] = useState(false);
   const inCall = call.room !== null;
+
+  // Info: (20261120 - Luphia) PDF 壓縮分割工作 (房間內所有人都看得到進度)；自己的工作完成時提示
+  const fitJobs = usePdfFitJobs(roomId, chat);
+  const myMemberIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    myMemberIdRef.current = chat.me?.memberId ?? null;
+  }, [chat.me]);
+  useEffect(
+    () =>
+      chat.subscribe(event => {
+        if (event.type !== 'pdf-job' || event.job.startedBy.memberId !== myMemberIdRef.current) return;
+        const name = event.job.filename.split('/').pop();
+        if (event.job.status === 'done') {
+          pushToastRef.current({ message: `${name}: ${event.job.detail}`, tone: 'success' }, 8000);
+        } else if (event.job.status === 'failed') {
+          pushToastRef.current({ message: `${name}: ${event.job.error ?? 'could not be processed'}`, tone: 'error' }, 8000);
+        }
+      }),
+    [chat]
+  );
 
   const pushToastRef = useRef(pushToast);
   useEffect(() => {
@@ -766,6 +801,9 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     const actions: IFileAction[] = [{ label: 'Open', onSelect: () => openFile(file.filename) }];
     if (isDocument(file.filename)) actions.push({ label: 'Open in editor', onSelect: () => openDoc(file.filename) });
     if (isDownloadAllowed(file)) actions.push({ label: 'Download', onSelect: () => handleDownload(file.filename) });
+    if (getFileKind(file.filename, file.mimeType) === 'pdf' && settings?.canUpload && (isDownloadAllowed(file) || canManageFile(file))) {
+      actions.push({ label: 'Fit to a size…', onSelect: () => openFit(file.filename) });
+    }
     actions.push({ label: 'Copy link', onSelect: () => handleCopyLink(file.filename) });
     if (canManageFile(file)) {
       const allowed = isDownloadAllowed(file);
@@ -777,6 +815,71 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     }
     return actions;
   };
+
+  // Info: (20261120 - Luphia) PDF 符合大小：開啟對話框並分析 (分析可能需要數秒到數十秒)
+  const loadFitAnalysis = (filename: string) => {
+    fetchAnalysis(roomId, chat.getToken(), filename)
+      .then(analysis =>
+        setFit(prev => (prev && prev.filename === filename ? { ...prev, analysis, error: null, settings: prev.touched ? prev.settings : defaultFitSettings(analysis) } : prev))
+      )
+      .catch(err => setFit(prev => (prev && prev.filename === filename ? { ...prev, error: err instanceof Error ? err.message : 'This PDF could not be measured' } : prev)));
+  };
+  const openFit = (filename: string, settings: IFitSettings | null = null) => {
+    setFit({ filename, view: 'dialog', analysis: null, error: null, settings: settings ?? defaultFitSettings(null), touched: !!settings });
+    loadFitAnalysis(filename);
+  };
+  const changeFit = (settings: IFitSettings) => setFit(prev => (prev ? { ...prev, settings, touched: true } : prev));
+  const startFitJob = async () => {
+    if (!fit) return;
+    setFitStarting(true);
+    try {
+      const job = await startFit(roomId, chat.getToken(), fit.filename, fit.settings);
+      fitJobs.upsert(job);
+      setFit(null);
+      setActiveName(null);
+      setBrowse(null);
+      setDoc(null);
+      pushToast({ message: `Working on ${fit.filename.split('/').pop()} — you can keep using the room`, tone: 'info' }, 4000);
+    } catch (err) {
+      pushToast({ message: err instanceof Error ? err.message : 'Could not start', tone: 'error' }, 6000);
+    } finally {
+      setFitStarting(false);
+    }
+  };
+  const fitJobCards =
+    fitJobs.jobs.length > 0 ? (
+      <section aria-labelledby="activity-pdf-jobs" className="flex flex-col gap-3">
+        <h2 id="activity-pdf-jobs" className="text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">
+          PDFs made smaller
+        </h2>
+        {fitJobs.jobs.map(job => {
+          const mine = job.startedBy.memberId === chat.me?.memberId;
+          return (
+            <PdfFitJobCard
+              key={job.id}
+              job={job}
+              isMine={mine}
+              canStop={mine || isOwner}
+              onStop={() =>
+                stopFit(roomId, chat.getToken(), job.id).catch(err => pushToast({ message: err instanceof Error ? err.message : 'Could not stop', tone: 'error' }, 5000))
+              }
+              onDismiss={() => fitJobs.dismiss(job.id)}
+              onRetry={() => {
+                fitJobs.dismiss(job.id);
+                openFit(job.filename, { limitMb: job.limitMb, level: job.level, snap: true, ends: null });
+              }}
+              onBrowse={folder => {
+                setActiveName(null);
+                setBrowse({ path: folder, selected: null });
+              }}
+              onDownloadFolder={handleDownloadFolder}
+              onOpenFile={openFile}
+              onDownloadFile={handleDownload}
+            />
+          );
+        })}
+      </section>
+    ) : null;
 
   // Info: (20261118 - Luphia) 文件編輯器
   const docSeq = useRef(0);
@@ -1250,6 +1353,21 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
         />
       );
     }
+    if (fit?.view === 'editor' && fit.analysis) {
+      return (
+        <PdfFitEditor
+          roomId={roomId}
+          getToken={chat.getToken}
+          filename={fit.filename}
+          analysis={fit.analysis}
+          settings={fit.settings}
+          starting={fitStarting}
+          onChange={changeFit}
+          onBack={() => setFit(prev => (prev ? { ...prev, view: 'dialog' } : prev))}
+          onStart={startFitJob}
+        />
+      );
+    }
     if (!activeFile) {
       return (
         <RoomActivity
@@ -1295,6 +1413,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           now={now}
           onToggleWatch={toggleWatch}
           onOpenFile={openFile}
+          jobs={fitJobCards}
         />
       );
     }
@@ -1380,6 +1499,15 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               className="h-9 rounded-lg bg-blue-600 px-3 text-xs font-semibold text-white hover:bg-blue-500"
             >
               Open in editor
+            </button>
+          )}
+          {activeKind === 'pdf' && settings?.canUpload && (isDownloadAllowed(activeFile) || canManageFile(activeFile)) && (
+            <button
+              type="button"
+              onClick={() => openFit(activeFile.filename)}
+              className="h-9 rounded-lg border border-white/10 px-3 text-xs font-semibold text-slate-200 hover:bg-white/5"
+            >
+              Fit to a size
             </button>
           )}
           <button
@@ -1729,6 +1857,24 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
             );
           })}
         </div>
+      )}
+
+      {fit?.view === 'dialog' && (
+        <PdfFitDialog
+          filename={fit.filename}
+          analysis={fit.analysis}
+          loadError={fit.error}
+          settings={fit.settings}
+          starting={fitStarting}
+          onChange={changeFit}
+          onCustomize={() => setFit(prev => (prev ? { ...prev, view: 'editor' } : prev))}
+          onStart={startFitJob}
+          onRetry={() => {
+            setFit(prev => (prev ? { ...prev, error: null } : prev));
+            loadFitAnalysis(fit.filename);
+          }}
+          onClose={() => setFit(null)}
+        />
       )}
 
       {newDocAsk && (

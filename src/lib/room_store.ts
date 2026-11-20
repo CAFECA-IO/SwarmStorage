@@ -457,6 +457,64 @@ async function ipfsAdd(data: Uint8Array, name: string): Promise<string> {
   return (await res.json()).Hash as string;
 }
 
+// Info: (20261120 - Luphia) 依瀏覽器上傳相同的格式切分片 (Reed-Solomon) 並存入 IPFS
+async function storeShards(bytes: Uint8Array, filename: string, onShard?: (done: number, total: number) => void) {
+  const { shardSize, shards } = encodeShards(bytes);
+  const base = filename.split('/').pop() || filename;
+  let done = 0;
+  const cids: string[] = new Array(shards.length);
+  // Info: (20261120 - Luphia) 同時最多 4 個分片
+  for (let i = 0; i < shards.length; i += 4) {
+    await Promise.all(
+      shards.slice(i, i + 4).map(async (shard, j) => {
+        cids[i + j] = await ipfsAdd(shard, `${base}.part${i + j}`);
+        done += 1;
+        onShard?.(done, shards.length);
+      })
+    );
+  }
+  return { cids, algorithm: { k: DATA_SHARDS, m: PARITY_SHARDS, shardSize, parity: 'reed-solomon' as const } };
+}
+
+// Info: (20261120 - Luphia) 房間裡沒人用過的資料夾名稱：「名稱」、「名稱 (2)」…
+export async function freeFolderName(roomPath: string, folder: string): Promise<string> {
+  const taken = new Set((await listRoomFiles(roomPath)).map(f => f.filename));
+  const inUse = (name: string) => taken.has(name) || [...taken].some(f => f.startsWith(`${name}/`));
+  if (!inUse(folder)) return folder;
+  for (let n = 2; n < 1000; n++) if (!inUse(`${folder} (${n})`)) return `${folder} (${n})`;
+  return `${folder} (${Date.now()})`;
+}
+
+/**
+ * Info: (20261120 - Luphia)
+ * 由伺服器新增檔案 (例如 PDF 壓縮分割的結果)：同名時自動改名；上傳者為發起的人
+ */
+export async function writeServerFile(
+  roomId: string,
+  roomPath: string,
+  filename: string,
+  bytes: Uint8Array,
+  options: { mimeType: string; memberHash: string | null; name: string | null; allowDownload: boolean; onShard?: (done: number, total: number) => void }
+): Promise<TFileMetadata> {
+  if (!isValidFilename(filename)) throw new Error('Invalid filename');
+  const target = (await exists(metadataPathOf(roomPath, filename))) ? await findFreeFilename(roomPath, filename) : filename;
+  const { cids, algorithm } = await storeShards(bytes, target, options.onShard);
+  const saved: TFileMetadata = {
+    filename: target,
+    originalFileSize: bytes.length,
+    mimeType: options.mimeType,
+    shards: cids,
+    algorithm,
+    allowDownload: options.allowDownload,
+    uploadedAt: Date.now(),
+    uploaderId: uploaderIdFor(roomId, options.memberHash),
+    uploaderName: options.name,
+  };
+  await writeMetadataFile(metadataPathOf(roomPath, target), saved);
+  announceFile(roomId, saved, null);
+  return saved;
+}
+
 /**
  * Info: (20261118 - Luphia)
  * 由伺服器寫入文件新版本 (共筆存檔)：分片格式與瀏覽器上傳相同；保留原上傳者與下載設定，
@@ -471,9 +529,7 @@ export async function writeDocVersion(
   editedBy: string | null
 ): Promise<TFileMetadata> {
   const bytes = new TextEncoder().encode(content);
-  const { shardSize, shards } = encodeShards(bytes);
-  const base = filename.split('/').pop() || filename;
-  const cids = await Promise.all(shards.map((shard, i) => ipfsAdd(shard, `${base}.part${i}`)));
+  const { cids, algorithm } = await storeShards(bytes, filename);
   const existing = await readFileMetadata(roomPath, filename);
   const saved: TFileMetadata = {
     ...(existing ?? {}),
@@ -481,7 +537,7 @@ export async function writeDocVersion(
     originalFileSize: bytes.length,
     mimeType: 'text/markdown',
     shards: cids,
-    algorithm: { k: DATA_SHARDS, m: PARITY_SHARDS, shardSize, parity: 'reed-solomon' },
+    algorithm,
     allowDownload: existing ? existing.allowDownload !== false : true,
     uploadedAt: existing && typeof existing.uploadedAt === 'number' ? existing.uploadedAt : Date.now(),
     editedAt: Date.now(),
