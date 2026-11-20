@@ -2,7 +2,11 @@ import { NextRequest } from 'next/server';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
 import { checkRoomAccess, memberHashFromRequest } from '@/lib/room_access';
-import { getRoomSettings, publicSettings, updateRoomSettings } from '@/lib/room_store';
+import { getRoomSettings, listRoomFiles, publicSettings, updateRoomSettings } from '@/lib/room_store';
+import { payInfoFor } from '@/lib/room_paid';
+import { ensureWatching, payConfig } from '@/lib/pay_server';
+import '@/lib/pay_rooms';
+import { DAY_MS, PAID_MIN_DAYS } from '@/lib/pay_plans';
 import { announceRoomSettings, updateRoomTokenExpiry } from '@/lib/chat_hub';
 
 export const dynamic = 'force-dynamic';
@@ -20,7 +24,10 @@ export async function GET(
     const memberHash = memberHashFromRequest(request.headers);
     const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'), memberHash);
     if (!access.ok) return jsonFail(access.code, access.message);
-    return jsonOk(getRoomSettings(roomId, access.config, memberHash), 'OK', { headers: { 'Cache-Control': 'no-store' } });
+    // Info: (20261120 - Luphia) 方案、容量、付費進房與自己的權限 (付費房沒買的人為 locked)
+    ensureWatching().catch(() => undefined);
+    const pay = await payInfoFor(access.roomPath, access.config, memberHash, await listRoomFiles(access.roomPath), !!payConfig());
+    return jsonOk({ ...getRoomSettings(roomId, access.config, memberHash), pay }, 'OK', { headers: { 'Cache-Control': 'no-store' } });
   } catch (error) {
     console.error('[Room Settings] Error reading settings:', error);
     return jsonFail(ApiCode.SERVER_ERROR, 'Internal Server Error');
@@ -49,6 +56,15 @@ export async function PATCH(
       return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid JSON body');
     }
 
+    // Info: (20261120 - Luphia) 付費延長或付費房：保存時間不能改短 (付費期間與「最後銷售後 30 天」)
+    const now = Date.now();
+    const soldRecently = (access.config.paid?.lastSaleAt ?? 0) + PAID_MIN_DAYS * DAY_MS > now;
+    if ('minutes' in patch && ((access.config.plan && access.config.plan.until > now) || access.config.paid?.enabled || soldRecently)) {
+      return jsonFail(ApiCode.VALIDATION_ERROR, 'This room’s time comes from a paid plan or paid access. Extend it in the Plan tab instead.');
+    }
+    if (access.config.paid?.enabled && patch.uploadPolicy === 'everyone') {
+      return jsonFail(ApiCode.VALIDATION_ERROR, 'Only the owner can upload to a paid room');
+    }
     const updated = await updateRoomSettings(access.roomPath, access.config, patch);
     if ('error' in updated) return jsonFail(ApiCode.VALIDATION_ERROR, updated.error);
     if ('minutes' in patch) updateRoomTokenExpiry(roomId, updated.expiration?.expiresAt ?? null);

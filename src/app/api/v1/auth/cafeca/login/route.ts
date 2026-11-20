@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
     return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid JSON body');
   }
 
-  let user: { account: string; handle: string | null };
+  let user: { account: string; handle: string | null; kycLevel: number | null };
   try {
     user = await verifyCafecaLogin(config, body, domain.domain, pending.nonce);
   } catch (error) {
@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
   const keyHash = hashMemberKey(request.headers.get('x-member-key'));
   const merged = keyHash ? await mergeMemberIntoAccount(keyHash, accountMemberHash(user.account), user.handle) : { rooms: 0, files: 0 };
 
-  const session = encodeSession(user.account, user.handle);
+  const session = encodeSession(user.account, user.handle, user.kycLevel);
   const response = jsonOk({ account: user.account, handle: user.handle, merged }, 'Signed in', { headers: { 'Cache-Control': 'no-store' } });
   response.cookies.set(SESSION_COOKIE, session.value, sessionCookieOptions(isSecureRequest(request), session.maxAge));
   response.cookies.set(LOGIN_COOKIE, '', { path: '/', maxAge: 0 });

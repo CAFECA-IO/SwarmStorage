@@ -76,6 +76,8 @@ export type TChatEvent =
   | { type: 'doc'; filename: string; payload: Record<string, unknown> }
   // Info: (20261120 - Luphia) PDF 壓縮與分割的背景工作 (pdf_fit_jobs)
   | { type: 'pdf-job'; job: IPdfFitJob }
+  // Info: (20261120 - Luphia) 付款：房間延長、付費設定或銷售改變 (各自重新讀取房間設定)
+  | { type: 'pay'; change: 'extended' | 'paid-settings' | 'sale' }
   | { type: 'error'; message: string };
 
 interface IChatToken extends IChatMember {
@@ -93,17 +95,27 @@ interface IChatConnection {
   close: () => void;
 }
 
+// Info: (20261120 - Luphia) 付費房的內容閘門：沒有權限的連線收不到分片 (CID) 與文件內容
+export interface IRoomGate {
+  owner: string | null;
+  members: Set<string>;
+  previewNames: boolean;
+  previewFiles: Set<string>;
+}
+
 interface IChatHubState {
   tokens: Map<string, IChatToken>;
   rooms: Map<string, Map<string, IChatConnection>>;
   uploads: Map<string, Map<string, IUploadStatus>>;
+  gates: Map<string, IRoomGate>;
   sweeper?: ReturnType<typeof setInterval>;
 }
 
 // Info: (20261105 - Luphia) 掛在 globalThis，避免開發模式熱更新時產生多份狀態
 const globalForChat = globalThis as unknown as { drophereChatHub?: IChatHubState };
-const state: IChatHubState = globalForChat.drophereChatHub ?? { tokens: new Map(), rooms: new Map(), uploads: new Map() };
+const state: IChatHubState = globalForChat.drophereChatHub ?? { tokens: new Map(), rooms: new Map(), uploads: new Map(), gates: new Map() };
 if (!state.uploads) state.uploads = new Map();
+if (!state.gates) state.gates = new Map();
 globalForChat.drophereChatHub = state;
 
 // Info: (20261105 - Luphia) 上傳進度：超過 60 秒沒有更新視為中斷，中斷 30 秒後移除
@@ -141,10 +153,27 @@ const isMemberOnline = (roomId: string, memberId: string): boolean => {
   return false;
 };
 
+export function setRoomGate(roomId: string, gate: IRoomGate | null) {
+  if (gate) state.gates.set(roomId, gate);
+  else state.gates.delete(roomId);
+}
+
+// Info: (20261120 - Luphia) 依閘門決定這個連線收到的事件 (null = 不送)
+function gatedEvent(gate: IRoomGate, memberHash: string | null, event: TChatEvent): TChatEvent | null {
+  if (event.type !== 'file' && event.type !== 'doc') return event;
+  if (memberHash && (memberHash === gate.owner || gate.members.has(memberHash))) return event;
+  if (event.type === 'doc') return null;
+  const filename = String(event.metadata.filename ?? '');
+  if (gate.previewFiles.has(filename)) return event;
+  return gate.previewNames ? { ...event, metadata: { ...event.metadata, shards: [], locked: true } } : null;
+}
+
 const broadcast = (roomId: string, event: TChatEvent) => {
+  const gate = state.gates.get(roomId);
   state.rooms.get(roomId)?.forEach(conn => {
     try {
-      conn.send(event);
+      const out = gate ? gatedEvent(gate, state.tokens.get(conn.token)?.memberHash ?? null, event) : event;
+      if (out) conn.send(out);
     } catch {
       // Info: (20261105 - Luphia) 連線已關閉，由 unsubscribe 清理
     }

@@ -16,6 +16,10 @@ import { endCall } from '@/lib/call_service';
 import { announceFile, announceFileRemoved, closeRoom, onlineCount, uploadingCount } from '@/lib/chat_hub';
 import { notifyDocChangedElsewhere } from '@/lib/doc_invalidate';
 import { IPFS_API_URL } from '@/lib/server_env';
+import { GB, type IRoomPayInfo } from '@/lib/pay_plans';
+import { capacityBytes, hasContentAccess, usedBytesOf } from '@/lib/room_paid';
+
+const formatGb = (bytes: number) => `${(bytes / GB).toFixed(bytes < 10 * GB ? 1 : 0)} GB`;
 import { DATA_SHARDS, PARITY_SHARDS, SHARD_SIZE, decodeShards, encodeShards } from '@/lib/doc_codec';
 
 /**
@@ -71,6 +75,8 @@ export interface IRoomSettings {
   canUpload: boolean;
   myUploaderId: string | null;
   serverTime: number;
+  // Info: (20261120 - Luphia) 方案、容量與付費進房 (只有 GET 設定時提供)
+  pay?: IRoomPayInfo;
 }
 
 // Info: (20261108 - Luphia) 資料夾上傳：filename 為以 / 分隔的相對路徑 (例：experiment/raw/run-001.csv)
@@ -384,6 +390,21 @@ export async function saveFileMetadata(
     existing = JSON.parse(await fs.readFile(targetPath, 'utf-8'));
   } catch {
     existing = null;
+  }
+
+  // Info: (20261120 - Luphia) 容量：免費房間 FREE_ROOM_GB，付費延長後依方案
+  const isRepair = !!existing && !uploadId && sameExceptShards(existing, incoming);
+  if (!isRepair) {
+    const incomingSize = Number(incoming.originalFileSize) || 0;
+    const replacing = existing && ((myId && existing.uploaderId === myId) || owner) ? Number(existing.originalFileSize) || 0 : 0;
+    const used = usedBytesOf(await listRoomFiles(roomPath)) - replacing;
+    const capacity = capacityBytes(config);
+    if (used + incomingSize > capacity) {
+      return { ok: false, status: 'forbidden', message: `This room is full (${formatGb(used)} of ${formatGb(capacity)} used). Extend the room for more space.` };
+    }
+  } else if (!(await hasContentAccess(roomPath, config, memberHash))) {
+    // Info: (20261120 - Luphia) 付費房：沒有權限的人不能修復 (避免替換分片)
+    return { ok: false, status: 'forbidden', message: 'Unlock this room first' };
   }
 
   let saved: TFileMetadata;

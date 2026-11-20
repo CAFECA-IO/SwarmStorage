@@ -34,6 +34,24 @@ export interface IRoomConfig {
     setAt: number;
     minutes: number;
   };
+  // Info: (20261120 - Luphia) 付費延長的方案：容量 (GB) 與有效期限
+  plan?: { capacityGb: number; until: number };
+  // Info: (20261120 - Luphia) 付費進房 (房主設定)
+  paid?: IRoomPaidConfig;
+}
+
+export interface IRoomPaidConfig {
+  enabled: boolean;
+  // Info: (20261120 - Luphia) 價格 (USD micro)
+  price: number;
+  // Info: (20261120 - Luphia) 房主的 Solana 收款地址 (已以簽章證明)
+  payout: string | null;
+  payoutVerifiedAt: number | null;
+  ownerName: string | null;
+  // Info: (20261120 - Luphia) 付款前可以看到檔名與大小；免費預覽的檔案
+  previewNames: boolean;
+  previewFiles: string[];
+  lastSaleAt: number | null;
 }
 
 export type TRoomAccessResult =

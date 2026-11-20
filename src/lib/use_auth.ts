@@ -15,7 +15,8 @@ export interface IAuthUser {
   handle: string | null;
 }
 
-const REQUEST = { statement: 'Sign in to DropHere', claims: ['handle'] };
+// Info: (20261120 - Luphia) kyc_level：付費房賣家需要實名等級
+const REQUEST = { statement: 'Sign in to DropHere', claims: ['handle', 'kyc_level'] };
 
 async function fetchNonce(): Promise<ICafecaNonce & { wallet: string }> {
   const res = await fetch('/api/v1/auth/cafeca/nonce', { method: 'POST' });

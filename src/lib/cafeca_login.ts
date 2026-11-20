@@ -100,5 +100,7 @@ const verifierFor = (config: ICafecaConfig) => {
 export async function verifyCafecaLogin(config: ICafecaConfig, response: SignInResponse, domain: string, nonce: string) {
   const user = await verifierFor(config).verify(response, { domain, nonce });
   const handle = typeof user.claims.handle === 'string' && user.claims.handleVerified ? user.claims.handle : null;
-  return { account: user.account.toLowerCase(), handle };
+  // Info: (20261120 - Luphia) 實名等級 (付費房賣家門檻)
+  const kycLevel = typeof user.claims.kyc_level === 'number' && Number.isInteger(user.claims.kyc_level) ? user.claims.kyc_level : null;
+  return { account: user.account.toLowerCase(), handle, kycLevel };
 }

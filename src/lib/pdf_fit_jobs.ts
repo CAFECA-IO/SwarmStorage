@@ -2,6 +2,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { ROOM_BASE_DIR, isRoomOwner, canUpload, isValidRoomId, readRoomConfig, uploaderIdFor } from '@/lib/room_access';
 import { broadcastRoomEvent, resolveChatToken } from '@/lib/chat_hub';
+import { hasContentAccess } from '@/lib/room_paid';
 import { freeFolderName, readFileMetadata, readRoomFileBytes, writeServerFile, type TFileMetadata } from '@/lib/room_store';
 import { FitError, analyzePdf, buildPart, compressPdf, loadPdf, measureCompressed, prepareForSplit, sampleCompare, type ILoadedPdf } from '@/lib/pdf_fit_engine';
 import {
@@ -104,6 +105,8 @@ async function sourceOf(roomId: string, actor: IActor, filename: string): Promis
   if (!/\.pdf$/i.test(filename)) return fail('invalid', 'Only PDF files can be compressed and split');
   const metadata = await readFileMetadata(actor.roomPath, filename);
   if (!metadata) return fail('missing', 'File not found');
+  // Info: (20261120 - Luphia) 付費房：買了 (或房主) 才能處理
+  if (!(await hasContentAccess(actor.roomPath, await readRoomConfig(actor.roomPath), actor.memberHash))) return fail('forbidden', 'Unlock this room first');
   const mine = !!actor.memberHash && metadata.uploaderId === uploaderIdFor(roomId, actor.memberHash);
   if (metadata.allowDownload === false && !actor.owner && !mine) return fail('forbidden', 'Downloads are turned off for this file');
   const size = Number(metadata.originalFileSize) || 0;

@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
     {
       enabled: !!config,
       wallet: config?.wallet ?? null,
-      user: session ? { account: session.account, handle: session.handle } : null,
+      user: session ? { account: session.account, handle: session.handle, kyc: session.kyc } : null,
     },
     'OK',
     { headers: { 'Cache-Control': 'no-store' } }

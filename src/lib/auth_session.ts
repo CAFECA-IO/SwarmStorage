@@ -21,6 +21,8 @@ export interface ISession {
   account: string;
   // Info: (20261108 - Luphia) CAFECA 代稱 (使用者同意提供時才有)
   handle: string | null;
+  // Info: (20261120 - Luphia) CAFECA 實名等級 (使用者同意提供時才有；付費房賣家需要)
+  kyc: number | null;
   expiresAt: number;
 }
 
@@ -58,8 +60,8 @@ function sessionSecret(): Buffer {
 const b64url = (buf: Buffer) => buf.toString('base64url');
 const sign = (payload: string) => createHmac('sha256', sessionSecret()).update(payload).digest();
 
-export function encodeSession(account: string, handle: string | null): { value: string; maxAge: number } {
-  const body: ISession = { account: account.toLowerCase(), handle, expiresAt: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS };
+export function encodeSession(account: string, handle: string | null, kyc: number | null = null): { value: string; maxAge: number } {
+  const body: ISession = { account: account.toLowerCase(), handle, kyc, expiresAt: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS };
   const payload = b64url(Buffer.from(JSON.stringify(body), 'utf-8'));
   return { value: `${payload}.${b64url(sign(payload))}`, maxAge: SESSION_TTL_SECONDS };
 }
@@ -76,7 +78,8 @@ export function decodeSession(value: string | null | undefined): ISession | null
     if (typeof body.account !== 'string' || !/^0x[0-9a-f]{40}$/.test(body.account)) return null;
     if (typeof body.expiresAt !== 'number' || body.expiresAt <= Date.now() / 1000) return null;
     const handle = typeof body.handle === 'string' && /^[a-z0-9_]{3,20}$/.test(body.handle) ? body.handle : null;
-    return { account: body.account, handle, expiresAt: body.expiresAt };
+    const kyc = Number.isInteger(body.kyc) && (body.kyc as number) >= 0 && (body.kyc as number) <= 9 ? (body.kyc as number) : null;
+    return { account: body.account, handle, kyc, expiresAt: body.expiresAt };
   } catch {
     return null;
   }

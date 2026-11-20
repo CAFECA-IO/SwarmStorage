@@ -28,6 +28,8 @@ import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
 import RoomActivity from '@/components/room_activity';
 import PdfFitDialog, { defaultFitSettings } from '@/components/pdf_fit_dialog';
+import PayCheckoutPage from '@/components/pay_checkout_page';
+import RoomPlanPanel from '@/components/room_plan_panel';
 import PdfFitEditor from '@/components/pdf_fit_editor';
 import PdfFitJobCard from '@/components/pdf_fit_job_card';
 import { fetchAnalysis, startFit, stopFit, usePdfFitJobs, type IFitSettings } from '@/lib/pdf_fit_client';
@@ -70,7 +72,7 @@ const GROUP_ORDER: TFileGroup[] = ['documents', 'media', 'other'];
 // Info: (20261106 - Luphia) 刪除後可復原的時間 (與伺服器 DELETE_UNDO_MS 相同)
 const DELETE_UNDO_MS = 10000;
 
-type TSidePanelTab = 'details' | 'chat' | 'settings';
+type TSidePanelTab = 'details' | 'chat' | 'settings' | 'plan';
 
 interface IToast {
   id: string;
@@ -161,6 +163,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     touched: boolean;
   } | null>(null);
   const [fitStarting, setFitStarting] = useState(false);
+  // Info: (20261120 - Luphia) 付費房結帳頁：沒買的人進房時開啟，付款後按 Open the room 才關閉
+  const [inCheckout, setInCheckout] = useState(false);
   const [pendingDrop, setPendingDrop] = useState<{
     entries: IPathedFile[];
     folders: { name: string; original: string; count: number; size: number }[];
@@ -298,6 +302,20 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   });
   const [callOpen, setCallOpen] = useState(false);
   const inCall = call.room !== null;
+
+  // Info: (20261120 - Luphia) 付款：房間延長、付費設定或銷售改變時重新讀取 (自己的權限可能改變)
+  const fetchFilesRef = useRef<(password?: string) => Promise<void> | void>(() => undefined);
+  const chatPasswordRef = useRef<string | null>(null);
+  useEffect(() => {
+    chatPasswordRef.current = chatPassword;
+  }, [chatPassword]);
+  useEffect(
+    () =>
+      chat.subscribe(event => {
+        if (event.type === 'pay') fetchFilesRef.current(chatPasswordRef.current || undefined);
+      }),
+    [chat]
+  );
 
   // Info: (20261120 - Luphia) PDF 壓縮分割工作 (房間內所有人都看得到進度)；自己的工作完成時提示
   const fitJobs = usePdfFitJobs(roomId, chat);
@@ -458,6 +476,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     (name: string) => {
       const meta = filesRef.current.find(f => f.filename === name);
       if (!meta) return;
+      // Info: (20261120 - Luphia) 付費房沒買：檔案沒有分片，無法開啟
+      if ((meta as ILariaMetadata & { locked?: boolean }).locked) return;
       // Info: (20261105 - Luphia) 沒有開啟檔案時側欄顯示聊天；開啟檔案後切到 Details，視為已讀
       if (!activeNameRef.current) setSeenMessages(othersCountRef.current);
       setDoc(null);
@@ -503,6 +523,32 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       clearInterval(timer);
     };
   }, []);
+
+  // Info: (20261120 - Luphia) 付款後重新讀取檔案清單與設定 (付費房解鎖、延長、銷售)；不改變目前開啟的檔案
+  const refreshRoom = useCallback(
+    async (passwordValue?: string) => {
+      try {
+        const res = await fetch(`/api/v1/room/${roomId}`, { headers: memberHeaders({}, passwordValue || null) });
+        const data = await res.json();
+        if (data.code === ApiCode.OK) {
+          const list = ([...(data.payload || [])] as ILariaMetadata[]).sort((a, b) => a.filename.localeCompare(b.filename));
+          const before = new Map(filesRef.current.map(f => [f.filename, f.shards.join(',')]));
+          list.forEach(f => {
+            if (before.get(f.filename) !== f.shards.join(',')) blobPromises.current.delete(f.filename);
+          });
+          filesRef.current = list;
+          setFiles(list);
+        }
+      } catch {
+        // Info: (20261120 - Luphia) 下次事件再試
+      }
+      await fetchSettings(passwordValue);
+    },
+    [roomId, fetchSettings]
+  );
+  useEffect(() => {
+    fetchFilesRef.current = refreshRoom;
+  }, [refreshRoom]);
 
   const fetchFiles = useCallback(
     async (passwordValue?: string) => {
@@ -937,6 +983,21 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       pushToast({ message: 'Only the room owner can add files here.', tone: 'error' });
       return;
     }
+    // Info: (20261120 - Luphia) 容量不足：提示延長房間 (Plan 分頁)
+    const pay = settings.pay;
+    const adding = collected.files.reduce((sum, entry) => sum + entry.file.size, 0);
+    if (pay && pay.usedBytes + adding > pay.plan.capacityBytes) {
+      const gb = (bytes: number) => `${(bytes / 1073741824).toFixed(1)} GB`;
+      pushToast(
+        {
+          message: `Not enough space: ${gb(adding)} to add, ${gb(Math.max(0, pay.plan.capacityBytes - pay.usedBytes))} free. Extend the room for more space.`,
+          tone: 'error',
+          ...(pay.enabled ? { actionLabel: 'Plan', onAction: () => { setInspectorOpen(true); setSideTab('plan'); } } : {}),
+        },
+        8000
+      );
+      return;
+    }
     const taken = topLevelNames([...(files || []).map(f => f.filename), ...chat.uploads.map(u => u.filename)]);
     const renames = new Map<string, string>();
     const folders = new Map<string, { name: string; original: string; count: number; size: number }>();
@@ -982,7 +1043,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
       if (data.code !== ApiCode.OK) throw new Error(data.message || 'Could not save settings');
       if (data.payload) {
         const localNow = Date.now();
-        setSettings(data.payload as IRoomSettings);
+        setSettings(prev => ({ ...(data.payload as IRoomSettings), pay: prev?.pay }));
         setClockOffset((data.payload.serverTime ?? localNow) - localNow);
       }
     } catch (err) {
@@ -1054,6 +1115,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
     });
     return result;
   }, [files, loads]);
+  const lockedOut = settings?.pay?.access === 'locked' && !isOwner;
+  if (lockedOut && !inCheckout) setInCheckout(true);
   const expiresAt = settings?.expiresAt ?? null;
   const expiryText = settings && now > 0 && expiresAt ? formatRemaining(expiresAt - (now + clockOffset)) : null;
 
@@ -1061,7 +1124,15 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const activeKind = activeFile ? getFileKind(activeFile.filename, activeFile.mimeType) : null;
   const activeOutline = activeName ? outlines[activeName] || [] : [];
   const sidePanelTab: TSidePanelTab =
-    sideTab === 'settings' && isOwner ? 'settings' : activeFile ? (sideTab === 'settings' ? 'details' : sideTab) : 'chat';
+    sideTab === 'settings' && isOwner
+      ? 'settings'
+      : sideTab === 'plan' && settings?.pay?.enabled
+        ? 'plan'
+        : activeFile
+          ? sideTab === 'settings' || sideTab === 'plan'
+            ? 'details'
+            : sideTab
+          : 'chat';
   const unreadMessages = sidePanelTab === 'chat' ? 0 : Math.max(0, othersMessageCount - seenMessages);
 
   const switchSidePanel = (tab: TSidePanelTab) => {
@@ -1350,6 +1421,21 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           onClose={() => setDoc(null)}
           onUploadPdf={(file, path) => uploadFiles([{ file, path }])}
           onToast={(message, tone) => pushToast({ message, tone }, 6000)}
+        />
+      );
+    }
+    // Info: (20261120 - Luphia) 付費房沒買：結帳頁 (B)；付款後停在「進房」步驟，直到按下 Open the room
+    if (inCheckout && settings?.pay?.paid) {
+      return (
+        <PayCheckoutPage
+          roomId={roomId}
+          password={chatPassword}
+          settings={settings}
+          files={files || []}
+          onDownloadFree={handleDownload}
+          onUnlocked={() => {
+            refreshRoom(chatPassword || undefined).then(() => setInCheckout(false));
+          }}
         />
       );
     }
@@ -1745,6 +1831,17 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               <span className="ml-1.5 font-normal text-slate-400">{chat.status === 'connected' ? chat.online : ''}</span>
               {unreadBadge}
             </button>
+            {settings?.pay?.enabled && settings.pay.access === 'full' && (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={sidePanelTab === 'plan'}
+                onClick={() => switchSidePanel('plan')}
+                className={`-mb-px h-10 border-b-2 px-3 text-xs font-semibold ${sidePanelTab === 'plan' ? 'border-blue-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
+              >
+                Plan
+              </button>
+            )}
             {isOwner && (
               <button
                 type="button"
@@ -1789,6 +1886,10 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
               onToggleDownload={allow => handleToggleDownload(activeFile.filename, allow)}
               onDelete={() => handleDelete(activeFile.filename)}
             />
+          </div>
+        ) : sidePanelTab === 'plan' && settings ? (
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <RoomPlanPanel roomId={roomId} password={chatPassword} settings={settings} files={files || []} now={now + clockOffset} onChanged={() => refreshRoom(chatPassword || undefined)} />
           </div>
         ) : sidePanelTab === 'settings' && settings ? (
           <div className="min-h-0 flex-1 overflow-y-auto">

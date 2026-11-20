@@ -4,6 +4,7 @@ import { ApiCode } from '@/lib/status';
 import { checkRoomAccess, memberHashFromRequest } from '@/lib/room_access';
 import { sessionFromHeaders } from '@/lib/auth_session';
 import { listRoomFiles, saveFileMetadata, type TFileMetadata } from '@/lib/room_store';
+import { hasContentAccess, redactFiles } from '@/lib/room_paid';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,7 +63,10 @@ export async function GET(
     // Info: (20261105 - Luphia) 共用房間存取檢查：房號格式、存在、到期、密碼 (房主免密碼)
     const access = await checkRoomAccess(roomId, request.headers.get('x-room-password'), memberHashFromRequest(request.headers));
     if (!access.ok) return jsonFail(access.code, access.message);
-    return jsonOk(await listRoomFiles(access.roomPath), 'OK');
+    const files = await listRoomFiles(access.roomPath);
+    // Info: (20261120 - Luphia) 付費房沒買的人：只給檔名與大小 (不含分片) 與免費預覽檔
+    const allowed = await hasContentAccess(access.roomPath, access.config, memberHashFromRequest(request.headers));
+    return jsonOk(allowed ? files : redactFiles(files, access.config), 'OK');
   } catch (error) {
     console.error('[Room API] Error listing files:', error);
     return jsonFail(ApiCode.SERVER_ERROR, 'Internal Server Error');

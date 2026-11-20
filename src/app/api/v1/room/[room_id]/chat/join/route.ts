@@ -1,4 +1,5 @@
 import { NextRequest } from 'next/server';
+import { refreshGate } from '@/lib/room_paid';
 import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
 import { checkRoomAccess, memberHashFromRequest } from '@/lib/room_access';
@@ -24,6 +25,8 @@ export async function POST(
 
     // Info: (20261108 - Luphia) 以 CAFECA 登入且同意提供代稱時，以代稱作為暱稱
     const handle = sessionFromHeaders(request.headers)?.handle ?? null;
+    // Info: (20261120 - Luphia) 付費房：更新聊天推送的閘門 (重啟後第一個加入的人會建立)
+    await refreshGate(roomId, access.config);
     const { token, member, expiresAt } = issueChatToken(roomId, access.expiresAt, memberHash, handle);
     return jsonOk({ token, ...member, expiresAt, online: onlineCount(roomId) }, 'OK', {
       headers: { 'Cache-Control': 'no-store' },

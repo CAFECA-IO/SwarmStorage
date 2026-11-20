@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
 import { broadcastRoomEvent, onlineIdentities, resolveChatToken } from '@/lib/chat_hub';
+import { hasContentAccess } from '@/lib/room_paid';
 import { ROOM_BASE_DIR, canUpload, isRoomOwner, isValidRoomId, readRoomConfig, uploaderIdFor } from '@/lib/room_access';
 import { isValidFilename, readFileMetadata, readRoomFileBytes, writeDocVersion } from '@/lib/room_store';
 import { joinBlocks, splitBlocks } from '@/lib/doc_blocks';
@@ -346,6 +347,8 @@ interface IActor {
   memberHash: string | null;
   canWrite: boolean;
   owner: boolean;
+  // Info: (20261120 - Luphia) 付費房：買了 (或房主) 才能開啟文件
+  canRead: boolean;
 }
 
 export type TDocResult<T = Record<string, unknown>> = { ok: true; data: T } | { ok: false; status: 'auth' | 'forbidden' | 'invalid' | 'missing' | 'conflict'; message: string };
@@ -364,6 +367,7 @@ async function actorOf(roomId: string, token: string | null): Promise<IActor | n
     memberHash: entry.memberHash,
     canWrite: canUpload(config, entry.memberHash),
     owner: isRoomOwner(config, entry.memberHash),
+    canRead: await hasContentAccess(path.join(ROOM_BASE_DIR, roomId), config, entry.memberHash),
   };
 }
 
@@ -447,6 +451,7 @@ function stateOf(s: ISession, a: IActor) {
 export async function openDoc(roomId: string, filename: string, token: string | null): Promise<TDocResult> {
   const actor = await actorOf(roomId, token);
   if (!actor) return fail('auth', 'Invalid or expired room token');
+  if (!actor.canRead) return fail('forbidden', 'Unlock this room to open its documents');
   let s: ISession | null;
   try {
     s = await getSession(roomId, filename);
@@ -462,6 +467,7 @@ export async function openDoc(roomId: string, filename: string, token: string | 
 export async function createDoc(roomId: string, filename: string, token: string | null, source: string): Promise<TDocResult> {
   const actor = await actorOf(roomId, token);
   if (!actor) return fail('auth', 'Invalid or expired room token');
+  if (!actor.canRead) return fail('forbidden', 'Unlock this room to open its documents');
   if (!actor.canWrite) return fail('forbidden', 'Only the room owner can add files here');
   if (typeof source !== 'string' || source.length > MAX_DOC) return fail('invalid', 'Invalid document');
   if (!isValidFilename(filename) || !/\.(md|markdown)$/i.test(filename)) return fail('invalid', 'Invalid document name');
@@ -495,6 +501,7 @@ export interface IDocAction {
 export async function docAction(roomId: string, filename: string, token: string | null, body: IDocAction): Promise<TDocResult> {
   const a = await actorOf(roomId, token);
   if (!a) return fail('auth', 'Invalid or expired room token');
+  if (!a.canRead) return fail('forbidden', 'Unlock this room to open its documents');
   const s = await getSession(roomId, filename).catch(() => null);
   if (!s) return fail('missing', 'Document not found');
   touch(s, a);
