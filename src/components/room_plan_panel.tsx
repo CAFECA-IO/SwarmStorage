@@ -97,7 +97,7 @@ export default function RoomPlanPanel({ roomId, password, settings, files, now, 
           </button>
         </section>
       ) : (
-        <section aria-labelledby="plan-extend" className="flex flex-col gap-3">
+        <section id="plan-extend-section" aria-labelledby="plan-extend" className="flex scroll-mt-4 flex-col gap-3">
           <h3 id="plan-extend" className="text-[13px] font-bold text-slate-100">
             Keep this room longer
           </h3>
@@ -198,7 +198,17 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
   };
 
   return (
-    <section aria-label="Paid access" className={`flex flex-col gap-3 rounded-[14px] border p-3.5 ${paid.enabled ? 'border-violet-800' : 'border-white/10'}`}>
+    <section aria-label="Paid access" className={`flex flex-col gap-3 rounded-[14px] border p-3.5 ${paid.enabled || paid.setupPending ? 'border-violet-800' : 'border-white/10'}`}>
+      {paid.setupPending && !paid.enabled && (
+        <div role="note" className="rounded-lg bg-violet-950/60 px-3 py-2.5 text-xs leading-5 text-violet-100">
+          <p className="font-bold">Finish setting up paid access · {formatAmount(paid.price)} USD</p>
+          <p className="text-violet-200">
+            {[!kycOk && 'verify your ID in CAFECA', !longEnough && `keep the room ${PAID_MIN_DAYS}+ days`, !paid.payoutVerifiedAt && 'add your payout address']
+              .filter(Boolean)
+              .join(' · ') || 'Everything is ready — turn sales on below.'}
+          </p>
+        </div>
+      )}
       <ToggleSwitch
         id="paid-access"
         label="Charge for access"
@@ -244,7 +254,16 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
           </button>
         </li>
         {!longEnough && (
-          <li className="rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-amber-200">A paid room must stay open at least {PAID_MIN_DAYS} days. Extend the room above first.</li>
+          <li className="rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-amber-200">
+            A paid room must stay open at least {PAID_MIN_DAYS} days.{' '}
+            <button
+              type="button"
+              onClick={() => document.getElementById('plan-extend-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+              className="font-semibold text-blue-300 underline-offset-2 hover:underline"
+            >
+              Choose a plan
+            </button>
+          </li>
         )}
       </ol>
 

@@ -52,6 +52,8 @@ export interface IRoomPaidConfig {
   previewNames: boolean;
   previewFiles: string[];
   lastSaleAt: number | null;
+  // Info: (20261122 - Luphia) 建立房間時選擇收費、尚未完成設定 (延長 30 天、收款地址、開啟)
+  setupPending?: boolean;
 }
 
 export type TRoomAccessResult =

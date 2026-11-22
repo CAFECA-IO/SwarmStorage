@@ -5,15 +5,13 @@ import { checkRoomAccess, memberHashFromRequest, type IRoomConfig } from '@/lib/
 import { sessionFromHeaders } from '@/lib/auth_session';
 import { listRoomFiles } from '@/lib/room_store';
 import { broadcastRoomEvent } from '@/lib/chat_hub';
-import { readSales, updatePaidConfig } from '@/lib/room_paid';
+import { SELLER_KYC, readSales, updatePaidConfig } from '@/lib/room_paid';
 import { issueChallenge, isValidAddress, verifyChallenge } from '@/lib/pay_server';
 import { DAY_MS, MAX_ACCESS_PRICE, MIN_ACCESS_PRICE, PAID_MIN_DAYS, formatAmount } from '@/lib/pay_plans';
 
 export const dynamic = 'force-dynamic';
 export const runtime = 'nodejs';
 
-// Info: (20261120 - Luphia) 付費房賣家需要的 CAFECA 實名等級
-const SELLER_KYC = Math.max(0, Number(process.env.PAY_SELLER_KYC ?? 2));
 
 const challengeKey = (roomId: string, memberHash: string) => `payout:${roomId}:${memberHash}`;
 
@@ -33,6 +31,7 @@ const sellerView = (config: IRoomConfig) => ({
   previewNames: config.paid?.previewNames ?? true,
   previewFiles: config.paid?.previewFiles ?? [],
   lastSaleAt: config.paid?.lastSaleAt ?? null,
+  setupPending: !!config.paid?.setupPending && !config.paid?.enabled,
 });
 
 const csvCell = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
@@ -127,6 +126,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           uploadPolicy = 'owner';
         }
         next.enabled = enable;
+        if (enable) next.setupPending = false;
       }
       return { ...config, uploadPolicy, paid: next };
     });
@@ -147,5 +147,6 @@ function sellerViewToConfig(config: IRoomConfig) {
     previewNames: config.paid?.previewNames ?? true,
     previewFiles: config.paid?.previewFiles ?? [],
     lastSaleAt: config.paid?.lastSaleAt ?? null,
+    setupPending: config.paid?.setupPending ?? false,
   };
 }

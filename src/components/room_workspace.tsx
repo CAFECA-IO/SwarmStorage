@@ -53,6 +53,8 @@ interface IRoomWorkspaceProps {
   roomId: string;
   initialPassword?: string;
   initialFile?: string;
+  // Info: (20261122 - Luphia) 進房時開啟的側欄分頁 (建立收費房後直接到 Plan 完成設定)
+  initialPanel?: 'plan';
   onExit: () => void;
 }
 
@@ -116,7 +118,7 @@ const DocEditor = dynamic(() => import('@/components/doc_editor'), {
   loading: () => <div className="flex flex-1 items-center justify-center font-mono text-sm text-slate-400 animate-pulse">Opening editor…</div>,
 });
 
-export default function RoomWorkspace({ roomId, initialPassword, initialFile, onExit }: IRoomWorkspaceProps) {
+export default function RoomWorkspace({ roomId, initialPassword, initialFile, initialPanel, onExit }: IRoomWorkspaceProps) {
   const [files, setFiles] = useState<ILariaMetadata[] | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState('');
@@ -139,7 +141,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   const [downloading, setDownloading] = useState<Record<string, boolean>>({});
   const [linkCopied, setLinkCopied] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(initialPanel === 'plan');
   const [settings, setSettings] = useState<IRoomSettings | null>(null);
   // Info: (20261105 - Luphia) 伺服器時間 - 本機時間，修正時鐘誤差
   const [clockOffset, setClockOffset] = useState(0);
@@ -178,7 +180,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
   // Info: (20261105 - Luphia) 聊天：通過密碼驗證後才連線
   const [chatEnabled, setChatEnabled] = useState(false);
   const [chatPassword, setChatPassword] = useState<string | null>(null);
-  const [sideTab, setSideTab] = useState<TSidePanelTab>('details');
+  const [sideTab, setSideTab] = useState<TSidePanelTab>(initialPanel ?? 'details');
   const [seenMessages, setSeenMessages] = useState(0);
 
   const viewerRef = useRef<IHtmlViewerHandle>(null);
@@ -1500,6 +1502,14 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, on
           onToggleWatch={toggleWatch}
           onOpenFile={openFile}
           jobs={fitJobCards}
+          onExtend={
+            settings?.pay?.enabled && settings.pay.access === 'full'
+              ? () => {
+                  setInspectorOpen(true);
+                  switchSidePanel('plan');
+                }
+              : undefined
+          }
         />
       );
     }

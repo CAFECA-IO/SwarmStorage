@@ -110,7 +110,7 @@ export default function RoomLobby() {
   const listedRooms = sorted.filter(r => r.listed);
   const visible = filter === 'mine' ? mine : filter === 'open' ? openForUploads : sorted;
 
-  const enterRoom = (roomNumber: string) => router.push(`/room/${roomNumber}`);
+  const enterRoom = (roomNumber: string, options?: { paidSetup?: boolean }) => router.push(`/room/${roomNumber}${options?.paidSetup ? '?setup=paid' : ''}`);
 
   const handleJoin = (e: FormEvent) => {
     e.preventDefault();
@@ -226,7 +226,7 @@ export default function RoomLobby() {
           <p className="text-xs text-slate-500">Hidden rooms only appear for their owner and for people who have visited them.</p>
         </main>
 
-        <aside className="w-[380px] shrink-0 border-l border-white/10 bg-[#0D1424] px-6 py-7">
+        <aside className="w-[380px] shrink-0 overflow-y-auto border-l border-white/10 bg-[#0D1424] px-6 py-7">
           <RoomCreateForm variant="panel" onCreated={enterRoom} />
         </aside>
       </div>

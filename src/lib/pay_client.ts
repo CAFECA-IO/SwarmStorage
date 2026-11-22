@@ -146,7 +146,7 @@ export async function restoreAccess(roomId: string, password: string | null, wal
 // --- Info: (20261120 - Luphia) 房主：付費進房設定 ---
 
 export interface ISellerState {
-  paid: { enabled: boolean; price: number; payout: string | null; payoutVerifiedAt: number | null; previewNames: boolean; previewFiles: string[]; lastSaleAt: number | null };
+  paid: { enabled: boolean; price: number; payout: string | null; payoutVerifiedAt: number | null; previewNames: boolean; previewFiles: string[]; lastSaleAt: number | null; setupPending: boolean };
   seller: { signedIn: boolean; handle: string | null; kyc: number | null; required: number };
   sales: { at: number; buyerName: string | null; payer: string; token: string; amount: number; owner: number; fee: number; signature: string }[];
   totals: { count: number; received: number };

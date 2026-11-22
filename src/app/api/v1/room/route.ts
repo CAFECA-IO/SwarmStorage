@@ -3,6 +3,10 @@ import { jsonOk, jsonFail } from '@/lib/response';
 import { ApiCode } from '@/lib/status';
 import { memberHashFromRequest } from '@/lib/room_access';
 import { createRoom, listRooms } from '@/lib/room_store';
+import { sessionFromHeaders } from '@/lib/auth_session';
+import { payConfig } from '@/lib/pay_server';
+import { SELLER_KYC } from '@/lib/room_paid';
+import { MAX_ACCESS_PRICE, MIN_ACCESS_PRICE, formatAmount } from '@/lib/pay_plans';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,6 +42,20 @@ export async function POST(request: NextRequest) {
       return jsonFail(ApiCode.VALIDATION_ERROR, 'Invalid JSON body');
     }
 
+    // Info: (20261122 - Luphia) 建立時選擇收費：需要付款功能、CAFECA 登入且實名等級足夠
+    let paidPrice: number | null = null;
+    if (body.paid && typeof body.paid === 'object') {
+      const price = Number((body.paid as { price?: unknown }).price);
+      if (!payConfig()) return jsonFail(ApiCode.VALIDATION_ERROR, 'Payments are not available on this server');
+      if (!Number.isInteger(price) || price < MIN_ACCESS_PRICE || price > MAX_ACCESS_PRICE) {
+        return jsonFail(ApiCode.VALIDATION_ERROR, `Choose a price between ${formatAmount(MIN_ACCESS_PRICE)} and ${formatAmount(MAX_ACCESS_PRICE)}`);
+      }
+      const session = sessionFromHeaders(request.headers);
+      if (!session) return jsonFail(ApiCode.UNAUTHORIZED, 'Sign in with CAFECA to charge for access');
+      if ((session.kyc ?? -1) < SELLER_KYC) return jsonFail(ApiCode.FORBIDDEN, 'Your CAFECA account needs ID verification to charge for access');
+      paidPrice = price;
+    }
+
     const result = await createRoom({
       name: body.name,
       listed: body.listed,
@@ -46,6 +64,7 @@ export async function POST(request: NextRequest) {
       password: body.password,
       minutes: body.minutes,
       ownerHash,
+      paidPrice,
     });
     if ('error' in result) return jsonFail(ApiCode.VALIDATION_ERROR, result.error);
     console.log(`[Room] Created new room: ${result.roomNumber}`);

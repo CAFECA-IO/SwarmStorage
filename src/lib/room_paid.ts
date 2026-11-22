@@ -13,6 +13,8 @@ import { DAY_MS, GB, PAID_MIN_DAYS, type IRoomPayInfo } from '@/lib/pay_plans';
  */
 
 export const FREE_ROOM_GB = Math.max(1, Number(process.env.FREE_ROOM_GB) || 10);
+// Info: (20261122 - Luphia) 付費房賣家需要的 CAFECA 實名等級
+export const SELLER_KYC = Math.max(0, Number(process.env.PAY_SELLER_KYC ?? 2));
 
 interface IAccessFile {
   // Info: (20261120 - Luphia) memberHash → 購買紀錄

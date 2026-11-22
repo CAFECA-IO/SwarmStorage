@@ -13,6 +13,8 @@ import {
 export interface IAuthUser {
   account: string;
   handle: string | null;
+  // Info: (20261122 - Luphia) CAFECA 實名等級 (同意提供時才有)
+  kyc?: number | null;
 }
 
 // Info: (20261120 - Luphia) kyc_level：付費房賣家需要實名等級

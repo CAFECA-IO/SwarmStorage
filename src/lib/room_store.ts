@@ -213,6 +213,8 @@ export async function createRoom(options: {
   password: unknown;
   minutes: unknown;
   ownerHash: string;
+  // Info: (20261122 - Luphia) 建立時選擇收費 (價格)；由呼叫端先檢查 CAFECA 實名與付款功能
+  paidPrice?: number | null;
 }): Promise<{ roomNumber: string } | { error: string }> {
   const minutes = Number(options.minutes);
   if (!RETENTION_MINUTES.includes(minutes)) return { error: 'Invalid retention' };
@@ -241,6 +243,21 @@ export async function createRoom(options: {
       expiration: { expiresAt: now + minutes * 60 * 1000, setAt: now, minutes },
     };
     if (typeof options.password === 'string' && options.password) config.passwordHash = hashPassword(options.password);
+    // Info: (20261122 - Luphia) 收費房：先記下價格，只有房主上傳；延長到 30 天以上並設定收款地址後才開始賣
+    if (options.paidPrice) {
+      config.uploadPolicy = 'owner';
+      config.paid = {
+        enabled: false,
+        price: options.paidPrice,
+        payout: null,
+        payoutVerifiedAt: null,
+        ownerName: null,
+        previewNames: true,
+        previewFiles: [],
+        lastSaleAt: null,
+        setupPending: true,
+      };
+    }
     await writeRoomConfig(roomPath, config);
     return { roomNumber };
   }

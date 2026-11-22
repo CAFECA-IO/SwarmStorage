@@ -31,7 +31,8 @@ export const planById = (id: unknown) => ROOM_PLANS.find(p => p.id === id) ?? nu
 export const ACCESS_FEE_BPS = 1000;
 // Info: (20261120 - Luphia) 付費房最後一筆銷售後至少保留 30 天 (到期時間不足 30 天時不能賣)
 export const PAID_MIN_DAYS = 30;
-export const MIN_ACCESS_PRICE = 0.5 * MICRO;
+// Info: (20261122 - Luphia) 付費房最低售價 5 USD
+export const MIN_ACCESS_PRICE = 5 * MICRO;
 export const MAX_ACCESS_PRICE = 10_000 * MICRO;
 export const INVOICE_TTL_MS = 30 * 60 * 1000;
 
