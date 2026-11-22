@@ -20,10 +20,21 @@ const MAINNET_MINTS: Record<TPayToken, string> = {
 };
 const RPC_URL = process.env.SOLANA_RPC_URL?.trim() || 'https://api.mainnet-beta.solana.com';
 const PAY_DIR = path.join(DROPHERE_DATA_DIR, 'payments');
-const CHECK_INTERVAL_MS = 2000;
+// Info: (20261122 - Luphia) 查鏈頻率：剛付款 (30 秒內) 或已看到交易時每 2 秒；5 分鐘內每 5 秒；之後每 10 秒；帳單過期後每 30 秒
+const FAST_CHECK_MS = 2000;
+const FAST_WINDOW_MS = 30 * 1000;
+const MEDIUM_CHECK_MS = 5000;
+const MEDIUM_WINDOW_MS = 5 * 60 * 1000;
+const SLOW_CHECK_MS = 10 * 1000;
+const EXPIRED_CHECK_MS = 30 * 1000;
+// Info: (20261122 - Luphia) 同時進行的查鏈最多 4 筆 (避免瞬間用光 RPC 額度)
+const MAX_PARALLEL_CHECKS = 4;
+// Info: (20261122 - Luphia) 被 RPC 限流 (429) 時暫停查鏈：2 秒起、每次加倍、最多 30 秒
+const BACKOFF_MIN_MS = 2000;
+const BACKOFF_MAX_MS = 30 * 1000;
 // Info: (20261120 - Luphia) 帳單過期後仍持續在鏈上找 24 小時 (轉帳 QR 可能晚到)
 const WATCH_MS = 24 * 60 * 60 * 1000;
-const SWEEP_MS = 20 * 1000;
+const SWEEP_MS = 10 * 1000;
 
 export class PayError extends Error {}
 
@@ -75,7 +86,10 @@ export function payConfig(): IPayConfig | null {
 }
 
 let connection: Connection | null = null;
-const rpc = () => (connection ??= new Connection(RPC_URL, 'confirmed'));
+// Info: (20261122 - Luphia) 不使用 web3.js 內建的限流重試 (會卡住請求)，改由這裡統一退避
+const rpc = () => (connection ??= new Connection(RPC_URL, { commitment: 'confirmed', disableRetryOnRateLimit: true }));
+
+const isRateLimited = (err: unknown) => /429|too many requests|rate limit/i.test(err instanceof Error ? err.message : String(err));
 
 export const isValidAddress = (address: unknown): address is string => {
   if (typeof address !== 'string' || address.length < 32 || address.length > 44) return false;
@@ -99,6 +113,8 @@ export interface IInvoice extends Omit<IPublicInvoice, 'payUrl'> {
   title: string;
   lastCheckAt: number;
   confirming: boolean;
+  // Info: (20261122 - Luphia) 買家最近一次動作 (取得交易、送出交易)：之後 30 秒內加快查鏈
+  activeAt?: number;
 }
 
 interface IPayState {
@@ -107,9 +123,21 @@ interface IPayState {
   sweeper?: ReturnType<typeof setInterval>;
   checking: Set<string>;
   onPaid: ((invoice: IInvoice) => Promise<IInvoice['result']>) | null;
+  backoffUntil: number;
+  backoffMs: number;
 }
 const globalForPay = globalThis as unknown as { drophereePay?: IPayState };
-const state: IPayState = globalForPay.drophereePay ?? { invoices: new Map(), loaded: false, checking: new Set(), onPaid: null };
+const state: IPayState = globalForPay.drophereePay ?? { invoices: new Map(), loaded: false, checking: new Set(), onPaid: null, backoffUntil: 0, backoffMs: 0 };
+state.backoffUntil ??= 0;
+state.backoffMs ??= 0;
+
+function noteRateLimit() {
+  state.backoffMs = Math.min(BACKOFF_MAX_MS, Math.max(BACKOFF_MIN_MS, state.backoffMs * 2));
+  state.backoffUntil = Date.now() + state.backoffMs;
+  console.warn(`[Pay] RPC rate limited; pausing chain checks for ${state.backoffMs / 1000} s`);
+}
+
+const RPC_BUSY = 'The payment network is busy. Try again in a few seconds.';
 globalForPay.drophereePay = state;
 
 const invoiceFile = (id: string) => path.join(PAY_DIR, 'invoices', `${id}.json`);
@@ -233,6 +261,7 @@ export async function buildPaymentTransaction(invoice: IInvoice, account: string
   if (payer.equals(config.feePayer.publicKey)) throw new PayError('Invalid wallet address');
   const mint = new PublicKey(invoice.mint);
   const source = getAssociatedTokenAddressSync(mint, payer, true);
+  invoice.activeAt = Date.now();
 
   // Info: (20261120 - Luphia) 餘額不足時直接告訴使用者 (查不到時略過，交給錢包模擬)
   try {
@@ -246,7 +275,16 @@ export async function buildPaymentTransaction(invoice: IInvoice, account: string
     if (/could not find account|Invalid param: could not find/i.test(text)) throw new PayError(`This wallet has no ${invoice.token} on Solana`);
   }
 
-  const { blockhash } = await rpc().getLatestBlockhash('confirmed');
+  let blockhash: string;
+  try {
+    ({ blockhash } = await rpc().getLatestBlockhash('confirmed'));
+  } catch (err) {
+    if (isRateLimited(err)) {
+      noteRateLimit();
+      throw new PayError(RPC_BUSY);
+    }
+    throw err;
+  }
   const tx = new Transaction({ feePayer: config.feePayer.publicKey, recentBlockhash: blockhash });
   const reference = new PublicKey(invoice.reference);
   invoice.payees.forEach((payee, index) => {
@@ -279,10 +317,15 @@ export async function submitTransaction(invoice: IInvoice, base64: string): Prom
   try {
     const signature = await rpc().sendRawTransaction(tx.serialize(), { skipPreflight: false, preflightCommitment: 'confirmed' });
     invoice.lastCheckAt = 0;
+    invoice.activeAt = Date.now();
     return signature;
   } catch (err) {
     const text = err instanceof Error ? err.message : String(err);
     console.warn('[Pay] submit failed:', text);
+    if (isRateLimited(err)) {
+      noteRateLimit();
+      throw new PayError(RPC_BUSY);
+    }
     if (/insufficient funds/i.test(text)) throw new PayError(`Not enough ${invoice.token} in this wallet`);
     if (/blockhash not found|expired/i.test(text)) throw new PayError('The transaction took too long to sign. Try again.');
     throw new PayError('The payment could not be sent. Try again.');
@@ -326,11 +369,23 @@ export function onInvoicePaid(handler: (invoice: IInvoice) => Promise<IInvoice['
 
 /**
  * Info: (20261120 - Luphia)
- * 在鏈上找這張帳單的付款 (最多每 2 秒一次)：找到已確認的交易 → confirming；最終確認 (finalized) 且金額正確 → 套用
+ * 在鏈上找這張帳單的付款 (頻率見 checkIntervalOf；被限流時暫停)：找到已確認的交易 → confirming；最終確認 (finalized) 且金額正確 → 套用
+ * 瀏覽器每 2 秒詢問一次，但只有到了查鏈時間才真的呼叫 RPC，其餘回傳目前狀態
  */
+function checkIntervalOf(invoice: IInvoice, now: number): number {
+  if (invoice.confirming) return FAST_CHECK_MS;
+  if (now > invoice.expiresAt) return EXPIRED_CHECK_MS;
+  const since = now - Math.max(invoice.createdAt, invoice.activeAt ?? 0);
+  if (since < FAST_WINDOW_MS) return FAST_CHECK_MS;
+  if (since < MEDIUM_WINDOW_MS) return MEDIUM_CHECK_MS;
+  return SLOW_CHECK_MS;
+}
+
 export async function checkInvoice(invoice: IInvoice, force = false): Promise<IInvoice> {
   if (invoice.status !== 'pending' || state.checking.has(invoice.id)) return invoice;
-  if (!force && Date.now() - invoice.lastCheckAt < CHECK_INTERVAL_MS) return invoice;
+  const now = Date.now();
+  if (now < state.backoffUntil) return invoice;
+  if (!force && (now - invoice.lastCheckAt < checkIntervalOf(invoice, now) || state.checking.size >= MAX_PARALLEL_CHECKS)) return invoice;
   state.checking.add(invoice.id);
   invoice.lastCheckAt = Date.now();
   try {
@@ -357,8 +412,10 @@ export async function checkInvoice(invoice: IInvoice, force = false): Promise<II
       state.invoices.delete(invoice.id);
       break;
     }
+    state.backoffMs = 0;
   } catch (err) {
-    console.warn('[Pay] check failed:', err instanceof Error ? err.message : err);
+    if (isRateLimited(err)) noteRateLimit();
+    else console.warn('[Pay] check failed:', err instanceof Error ? err.message : err);
   } finally {
     state.checking.delete(invoice.id);
   }
@@ -374,7 +431,8 @@ function startSweeper() {
         state.invoices.delete(invoice.id);
         return;
       }
-      if (now - invoice.lastCheckAt > SWEEP_MS - 1000) checkInvoice(invoice).catch(() => undefined);
+      // Info: (20261122 - Luphia) 依各帳單的查鏈頻率 (checkInvoice 內判斷)；分散在這一輪內，避免同時送出
+      checkInvoice(invoice).catch(() => undefined);
     });
   }, SWEEP_MS);
   state.sweeper.unref?.();
