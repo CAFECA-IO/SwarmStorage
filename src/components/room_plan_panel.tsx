@@ -265,10 +265,14 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
   const previews = (
     <fieldset className="m-0 flex flex-col gap-2 border-0 p-0 text-xs text-slate-200">
       <legend className="mb-1.5 p-0 text-xs font-bold">Free before paying</legend>
-      <label className="flex items-center gap-2">
-        <input type="checkbox" aria-label="Show file names and sizes" checked={paid.previewNames} disabled={busy} onChange={e => save({ previewNames: e.target.checked })} className="h-4 w-4 accent-violet-500" />
-        Show file names and sizes
-      </label>
+      <ToggleSwitch
+        id="paid-preview-names"
+        label="Show file names and sizes"
+        description={paid.previewNames ? 'Visitors see what’s inside before paying' : 'Only free preview files are listed'}
+        checked={paid.previewNames}
+        disabled={busy}
+        onChange={previewNames => save({ previewNames })}
+      />
       {rootFiles.length === 0 ? (
         <p className="text-[11px] text-slate-400">Upload files to choose some as free previews.</p>
       ) : (
