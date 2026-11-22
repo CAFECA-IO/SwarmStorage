@@ -1,8 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { createPublicKey, randomBytes, randomUUID, verify as verifySignature } from 'crypto';
-import { Connection, Keypair, PublicKey, Transaction, type ParsedTransactionWithMeta, type TokenBalance } from '@solana/web3.js';
-import { createAssociatedTokenAccountIdempotentInstruction, createTransferCheckedInstruction, getAssociatedTokenAddressSync } from '@solana/spl-token';
+import { Connection, Keypair, PublicKey, SystemProgram, Transaction, TransactionInstruction, type ParsedTransactionWithMeta, type TokenBalance } from '@solana/web3.js';
 import { DROPHERE_DATA_DIR } from '@/lib/server_env';
 import { INVOICE_TTL_MS, TOKEN_DECIMALS, formatAmount, type IPublicInvoice, type TInvoiceKind, type TPayToken } from '@/lib/pay_plans';
 
@@ -37,6 +36,50 @@ const WATCH_MS = 24 * 60 * 60 * 1000;
 const SWEEP_MS = 10 * 1000;
 
 export class PayError extends Error {}
+
+// --- Info: (20261122 - Luphia) SPL Token 指令 (自行組裝，不使用 @solana/spl-token，避免帶入有安全通報的 bigint-buffer) ---
+
+// Info: (20261122 - Luphia) USDC / USDT 都使用原本的 Token Program (不是 Token-2022)
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
+// Info: (20261122 - Luphia) 持有人在該幣種的代幣帳戶 (Associated Token Account)：PDA [owner, token program, mint]
+export const associatedTokenAddress = (mint: PublicKey, owner: PublicKey) =>
+  PublicKey.findProgramAddressSync([owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()], ASSOCIATED_TOKEN_PROGRAM_ID)[0];
+
+// Info: (20261122 - Luphia) 建立代幣帳戶 (已存在時不做事)：Associated Token Program 的 CreateIdempotent (指令 1)
+function createTokenAccountIdempotent(payer: PublicKey, account: PublicKey, owner: PublicKey, mint: PublicKey) {
+  return new TransactionInstruction({
+    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: account, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: false, isWritable: false },
+      { pubkey: mint, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    ],
+    data: Buffer.from([1]),
+  });
+}
+
+// Info: (20261122 - Luphia) 轉帳並檢查幣種與小數位：Token Program 的 TransferChecked (指令 12，金額 u64 little-endian + 小數位 u8)
+function transferChecked(source: PublicKey, mint: PublicKey, destination: PublicKey, owner: PublicKey, amount: bigint, decimals: number) {
+  const data = Buffer.alloc(10);
+  data.writeUInt8(12, 0);
+  data.writeBigUInt64LE(amount, 1);
+  data.writeUInt8(decimals, 9);
+  return new TransactionInstruction({
+    programId: TOKEN_PROGRAM_ID,
+    keys: [
+      { pubkey: source, isSigner: false, isWritable: true },
+      { pubkey: mint, isSigner: false, isWritable: false },
+      { pubkey: destination, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: true, isWritable: false },
+    ],
+    data,
+  });
+}
 
 export const mintOf = (token: TPayToken) => new PublicKey(process.env[`PAY_${token}_MINT`]?.trim() || MAINNET_MINTS[token]);
 
@@ -260,7 +303,7 @@ export async function buildPaymentTransaction(invoice: IInvoice, account: string
   const payer = new PublicKey(account);
   if (payer.equals(config.feePayer.publicKey)) throw new PayError('Invalid wallet address');
   const mint = new PublicKey(invoice.mint);
-  const source = getAssociatedTokenAddressSync(mint, payer, true);
+  const source = associatedTokenAddress(mint, payer);
   invoice.activeAt = Date.now();
 
   // Info: (20261120 - Luphia) 餘額不足時直接告訴使用者 (查不到時略過，交給錢包模擬)
@@ -289,9 +332,9 @@ export async function buildPaymentTransaction(invoice: IInvoice, account: string
   const reference = new PublicKey(invoice.reference);
   invoice.payees.forEach((payee, index) => {
     const owner = new PublicKey(payee.address);
-    const destination = getAssociatedTokenAddressSync(mint, owner, true);
-    tx.add(createAssociatedTokenAccountIdempotentInstruction(config.feePayer.publicKey, destination, owner, mint));
-    const transfer = createTransferCheckedInstruction(source, mint, destination, payer, BigInt(payee.amount), TOKEN_DECIMALS);
+    const destination = associatedTokenAddress(mint, owner);
+    tx.add(createTokenAccountIdempotent(config.feePayer.publicKey, destination, owner, mint));
+    const transfer = transferChecked(source, mint, destination, payer, BigInt(payee.amount), TOKEN_DECIMALS);
     if (index === 0) transfer.keys.push({ pubkey: reference, isSigner: false, isWritable: false });
     tx.add(transfer);
   });

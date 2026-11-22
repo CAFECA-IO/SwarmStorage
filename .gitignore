@@ -37,6 +37,10 @@ yarn-error.log*
 .env*
 !.env.example
 
+# Solana keypairs (payment fee payer / treasury): never commit private keys
+fee-payer.json
+treasury.json
+
 # vercel
 .vercel
 
