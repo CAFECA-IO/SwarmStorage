@@ -203,3 +203,62 @@ export const PhoneOffIcon = callIcon(
     <path d="m22 2-20 20" />
   </>
 );
+
+// Info: (20261122 - Luphia) 房主通知與收入頁用的圖示
+const noticeIcon = (paths: React.ReactNode) =>
+  function NoticeIcon({ className }: { className?: string }) {
+    return (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+        {paths}
+      </svg>
+    );
+  };
+
+export const BellIcon = noticeIcon(
+  <>
+    <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" />
+    <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" />
+  </>
+);
+export const SaleIcon = noticeIcon(
+  <>
+    <path d="M12 2v20" />
+    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+  </>
+);
+export const ChartIcon = noticeIcon(
+  <>
+    <path d="M3 3v18h18" />
+    <path d="M7 16v-3" />
+    <path d="M12 16V8" />
+    <path d="M17 16v-6" />
+  </>
+);
+export const HourglassIcon = noticeIcon(
+  <>
+    <path d="M5 22h14" />
+    <path d="M5 2h14" />
+    <path d="M17 22v-4.2a2 2 0 0 0-.6-1.4L12 12l-4.4 4.4a2 2 0 0 0-.6 1.4V22" />
+    <path d="M7 2v4.2a2 2 0 0 0 .6 1.4L12 12l4.4-4.4a2 2 0 0 0 .6-1.4V2" />
+  </>
+);
+export const AlertIcon = noticeIcon(
+  <>
+    <path d="m21.7 18-8-14a2 2 0 0 0-3.4 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.7-3" />
+    <path d="M12 9v4" />
+    <path d="M12 17h.01" />
+  </>
+);
+export const ExternalIcon = noticeIcon(
+  <>
+    <path d="M15 3h6v6" />
+    <path d="M10 14 21 3" />
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+  </>
+);
+export const WalletIcon = noticeIcon(
+  <>
+    <path d="M19 7V4a1 1 0 0 0-1-1H5a2 2 0 0 0 0 4h15a1 1 0 0 1 1 1v4h-3a2 2 0 0 0 0 4h3a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1" />
+    <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
+  </>
+);

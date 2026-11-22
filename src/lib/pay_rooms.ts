@@ -5,6 +5,7 @@ import { publicSettings } from '@/lib/room_store';
 import { applyExtension, applyPurchase, hasContentAccess, onSale } from '@/lib/room_paid';
 import { createInvoice, ensureWatching, onInvoicePaid, payConfig, pendingCountFor, type IInvoice } from '@/lib/pay_server';
 import { PAY_TOKENS, planById, splitAccessPrice, type TPayToken } from '@/lib/pay_plans';
+import { emitOwner } from '@/lib/owner_earnings';
 
 /**
  * Info: (20261120 - Luphia)
@@ -38,6 +39,14 @@ onInvoicePaid(async (invoice: IInvoice) => {
       { payer: invoice.payer, token: invoice.token, amount: invoice.amount, owner, fee, signature: invoice.signature }
     );
     broadcastRoomEvent(invoice.roomId, { type: 'pay', change: 'sale' });
+    // Info: (20261122 - Luphia) 通知房主 (收入頁與鈴鐺即時更新)
+    const config = await readRoomConfig(path.join(ROOM_BASE_DIR, invoice.roomId));
+    if (config.ownerHash) {
+      emitOwner(config.ownerHash, {
+        type: 'sale',
+        notice: { id: `sale:${invoice.signature}`, kind: 'sale', at: Date.now(), roomId: invoice.roomId, roomName: roomName(invoice.roomId, config), amount: owner, token: invoice.token, buyerName: invoice.buyerName, signature: invoice.signature },
+      });
+    }
     return {};
   }
   return null;

@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useAuth } from '@/lib/use_auth';
+import NotificationBell from '@/components/notification_bell';
+import { useOwnerNotices } from '@/lib/use_owner_notices';
+import { formatAmount } from '@/lib/pay_plans';
 
 const shortAccount = (account: string) => `${account.slice(0, 6)}…${account.slice(-4)}`;
 
@@ -23,6 +27,8 @@ function KeyIcon({ className }: { className?: string }) {
 export default function AccountButton({ compact = false }: { compact?: boolean }) {
   const { enabled, user, busy, error, clearError, signIn, signOut } = useAuth();
   const [open, setOpen] = useState(false);
+  // Info: (20261122 - Luphia) 用過付費功能的房主：選單多一個「收入」
+  const owner = useOwnerNotices(!!user, formatAmount);
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -69,7 +75,9 @@ export default function AccountButton({ compact = false }: { compact?: boolean }
 
   const label = user.handle ? `@${user.handle}` : shortAccount(user.account);
   return (
-    <div ref={rootRef} className="relative">
+    <div className={`flex items-center gap-2 ${compact ? 'w-full' : ''}`}>
+    <NotificationBell enabled compact={compact} />
+    <div ref={rootRef} className={`relative ${compact ? 'min-w-0 flex-1' : ''}`}>
       <button
         type="button"
         aria-haspopup="menu"
@@ -86,6 +94,19 @@ export default function AccountButton({ compact = false }: { compact?: boolean }
             Signed in with CAFECA
             <span className="mt-0.5 block break-all font-mono text-[10px] text-slate-500">{user.account}</span>
           </p>
+          {owner.active && (
+            <Link
+              href="/earnings"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-[13px] text-slate-200 hover:bg-white/5 focus:bg-white/10 focus:outline-none"
+            >
+              Earnings
+              <span className="text-xs font-semibold text-emerald-300" title="Received in the last 30 days">
+                {formatAmount(owner.received30)}
+              </span>
+            </Link>
+          )}
           <button
             type="button"
             role="menuitem"
@@ -97,6 +118,7 @@ export default function AccountButton({ compact = false }: { compact?: boolean }
           </button>
         </div>
       )}
+    </div>
     </div>
   );
 }

@@ -38,6 +38,7 @@ import dynamic from 'next/dynamic';
 import { isDocument, NEW_DOC_TEMPLATE } from '@/lib/doc_settings';
 import RoomSettingsPanel from '@/components/room_settings_panel';
 import AccountButton from '@/components/account_button';
+import { refreshOwnerNotices } from '@/lib/use_owner_notices';
 import type { IFileAction } from '@/components/file_actions_menu';
 import { useRoomChat } from '@/lib/use_room_chat';
 import { useRoomUploader } from '@/lib/use_room_uploader';
@@ -315,6 +316,8 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
     () =>
       chat.subscribe(event => {
         if (event.type === 'pay') fetchFilesRef.current(chatPasswordRef.current || undefined);
+        // Info: (20261122 - Luphia) 付費設定或期限改變：房主的鈴鐺與收入重新讀取 (新銷售另有推送)
+        if (event.type === 'pay' && event.change !== 'sale') refreshOwnerNotices();
       }),
     [chat]
   );
