@@ -339,7 +339,7 @@ interface IRoomActivityProps {
   canDownloadFile: (file: ILariaMetadata) => boolean;
   // Info: (20261120 - Luphia) PDF 壓縮分割的工作卡片
   jobs?: React.ReactNode;
-  // Info: (20261122 - Luphia) 延長房間 (開啟 Plan 分頁)；付款功能關閉時不提供
+  // Info: (20261122 - Luphia) 點到期時間付費延長 (開啟 Plan 分頁)；付款功能關閉時不提供
   onExtend?: () => void;
 }
 
@@ -446,12 +446,21 @@ export default function RoomActivity({
               </span>
               <span className="rounded-md bg-slate-800 px-2 py-1 text-slate-300">Delete your own files</span>
               {isOwner && <span className="rounded-md bg-blue-950 px-2 py-1 text-blue-200">You own this room</span>}
-              {expiryText && <span className="rounded-md bg-slate-800 px-2 py-1 text-slate-300">{expiryText}</span>}
-              {onExtend && (
-                <button type="button" onClick={onExtend} className="rounded-md border border-blue-500/60 bg-blue-950 px-2 py-1 font-semibold text-blue-200 hover:bg-blue-900">
-                  Extend
-                </button>
-              )}
+              {/* Info: (20261122 - Luphia) 付款功能開啟時，點到期時間即可付費延長 (開啟 Plan 分頁) */}
+              {expiryText &&
+                (onExtend ? (
+                  <button
+                    type="button"
+                    onClick={onExtend}
+                    title="Keep this room longer"
+                    aria-label={`${expiryText} · keep this room longer`}
+                    className="rounded-md bg-slate-800 px-2 py-1 text-slate-300 underline decoration-slate-500 decoration-dotted underline-offset-2 hover:bg-blue-950 hover:text-blue-200 hover:decoration-blue-300"
+                  >
+                    {expiryText}
+                  </button>
+                ) : (
+                  <span className="rounded-md bg-slate-800 px-2 py-1 text-slate-300">{expiryText}</span>
+                ))}
             </div>
           </div>
           <div className="flex flex-wrap gap-2">

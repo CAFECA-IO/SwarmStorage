@@ -5,7 +5,7 @@ import { memberHeaders } from '@/lib/member';
 import { useAuth } from '@/lib/use_auth';
 import { canSignMessage, useSolanaWallets } from '@/lib/solana_wallet';
 import { fetchSeller, updateSeller, usePayment, verifyPayout, type ISellerState } from '@/lib/pay_client';
-import { DAY_MS, GB, PAID_MIN_DAYS, ROOM_PLANS, formatAmount, parseAmount, shortAddress, splitAccessPrice, type TPayToken } from '@/lib/pay_plans';
+import { DAY_MS, GB, MIN_ACCESS_PRICE, PAID_MIN_DAYS, ROOM_PLANS, formatAmount, parseAmount, shortAddress, splitAccessPrice, type TPayToken } from '@/lib/pay_plans';
 import { PayStatus, PhoneQr, TokenToggle, TxLink, WalletButtons } from '@/components/pay_widgets';
 import ToggleSwitch from '@/components/toggle_switch';
 
@@ -141,13 +141,43 @@ export default function RoomPlanPanel({ roomId, password, settings, files, now, 
 
 const phaseIsStale = (phase: string) => phase === 'expired' || phase === 'idle';
 
+type TStepState = 'done' | 'current' | 'todo';
+
+// Info: (20261122 - Luphia) 設定步驟：編號 (完成為勾)、標題、說明與這一步的操作
+function SetupStep({ n, state, title, children }: { n: number; state: TStepState; title: string; children?: React.ReactNode }) {
+  return (
+    <li aria-current={state === 'current' ? 'step' : undefined} className={`flex gap-3 rounded-xl border p-3 ${state === 'current' ? 'border-violet-600 bg-violet-950/40' : 'border-white/10'}`}>
+      <span
+        aria-hidden="true"
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-bold ${state === 'done' ? 'bg-emerald-500 text-emerald-950' : state === 'current' ? 'bg-violet-500 text-white' : 'border border-slate-600 text-slate-400'}`}
+      >
+        {state === 'done' ? '✓' : n}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <p className={`text-[13px] font-semibold ${state === 'todo' ? 'text-slate-400' : 'text-slate-100'}`}>
+          <span className="sr-only">{state === 'done' ? 'Done: ' : state === 'current' ? 'Next: ' : 'Later: '}</span>
+          {title}
+        </p>
+        {children}
+      </div>
+    </li>
+  );
+}
+
 function SellerSection({ roomId, password, settings, files, now, onChanged }: IRoomPlanPanelProps) {
   const wallets = useSolanaWallets();
+  const signers = wallets.filter(canSignMessage);
   const auth = useAuth();
   const [state, setState] = useState<ISellerState | null>(null);
   const [priceText, setPriceText] = useState('5.00');
+  const [priceNote, setPriceNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [extendToken, setExtendToken] = useState<TPayToken>('USDC');
+  const [showQr, setShowQr] = useState(false);
+  const extend = usePayment(roomId, password, onChanged);
+  const minPlan = ROOM_PLANS.find(p => p.days >= PAID_MIN_DAYS) ?? ROOM_PLANS[0];
 
   const load = useCallback(() => {
     fetchSeller(roomId, password)
@@ -166,9 +196,11 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
   const { paid, seller } = state;
   const kycOk = seller.signedIn && (seller.kyc ?? -1) >= seller.required;
   const longEnough = !settings.expiresAt || settings.expiresAt >= now + PAID_MIN_DAYS * DAY_MS;
+  const payoutOk = !!paid.payout && !!paid.payoutVerifiedAt;
   const price = parseAmount(priceText);
   const split = price ? splitAccessPrice(price) : null;
   const rootFiles = files.filter(f => !f.filename.includes('/')).slice(0, 30);
+  const extending = ['creating', 'connecting', 'signing', 'sending', 'confirming'].includes(extend.phase);
 
   const run = async (task: () => Promise<unknown>) => {
     setBusy(true);
@@ -177,14 +209,20 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
       await task();
       load();
       onChanged();
+      return true;
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong');
+      return false;
     } finally {
       setBusy(false);
     }
   };
   const save = (patch: Record<string, unknown>) => run(() => updateSeller(roomId, password, patch));
-  const signer = wallets.find(canSignMessage);
+  // Info: (20261122 - Luphia) 售價：離開欄位或按 Enter 時自動儲存
+  const savePrice = async () => {
+    if (!price || price === paid.price) return;
+    if (await save({ price })) setPriceNote('Saved');
+  };
 
   const downloadCsv = async () => {
     const res = await fetch(`/api/v1/room/${roomId}/paid?format=csv`, { headers: memberHeaders({}, password) });
@@ -197,105 +235,44 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  return (
-    <section aria-label="Paid access" className={`flex flex-col gap-3 rounded-[14px] border p-3.5 ${paid.enabled || paid.setupPending ? 'border-violet-800' : 'border-white/10'}`}>
-      {paid.setupPending && !paid.enabled && (
-        <div role="note" className="rounded-lg bg-violet-950/60 px-3 py-2.5 text-xs leading-5 text-violet-100">
-          <p className="font-bold">Finish setting up paid access · {formatAmount(paid.price)} USD</p>
-          <p className="text-violet-200">
-            {[!kycOk && 'verify your ID in CAFECA', !longEnough && `keep the room ${PAID_MIN_DAYS}+ days`, !paid.payoutVerifiedAt && 'add your payout address']
-              .filter(Boolean)
-              .join(' · ') || 'Everything is ready — turn sales on below.'}
-          </p>
-        </div>
-      )}
-      <ToggleSwitch
-        id="paid-access"
-        label="Charge for access"
-        description="Visitors pay you directly · 10% DropHere fee"
-        checked={paid.enabled}
-        disabled={busy || (!paid.enabled && (!kycOk || !paid.payoutVerifiedAt || !longEnough))}
-        onChange={enabled => save({ enabled })}
-      />
+  const priceField = (
+    <div className="flex flex-col gap-1.5">
+      <label className="flex items-center gap-2 text-xs text-slate-300">
+        <input
+          value={priceText}
+          inputMode="decimal"
+          aria-label="Price"
+          disabled={busy}
+          onChange={e => {
+            setPriceText(e.target.value);
+            setPriceNote(null);
+          }}
+          onBlur={savePrice}
+          onKeyDown={e => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+          }}
+          className="h-10 w-28 rounded-[10px] border border-violet-600 bg-[#020617] px-3 font-mono text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-violet-500/60"
+        />
+        USDC or USDT
+        {priceNote && <span className="text-emerald-300">✓ {priceNote}</span>}
+      </label>
+      <p className="text-[11px] text-slate-400">
+        {split ? `You receive ${formatAmount(split.owner)} per sale · DropHere fee ${formatAmount(split.fee)}` : `Enter a price of at least ${formatAmount(MIN_ACCESS_PRICE)}`}
+      </p>
+    </div>
+  );
 
-      <ol className="flex flex-col gap-2 text-xs">
-        <li className={`rounded-lg border px-3 py-2 ${kycOk ? 'border-emerald-900 bg-emerald-950/40 text-emerald-200' : 'border-white/10 text-slate-300'}`}>
-          {kycOk ? (
-            <>✓ Signed in with CAFECA{seller.handle ? ` as @${seller.handle}` : ''} · ID verified</>
-          ) : seller.signedIn ? (
-            <>
-              Your CAFECA account needs ID verification (level {seller.required}).{' '}
-              <button type="button" onClick={auth.signIn} className="text-blue-300 underline-offset-2 hover:underline">
-                Sign in again after verifying
-              </button>
-            </>
-          ) : (
-            <>
-              Sign in with CAFECA to sell access.{' '}
-              <button type="button" disabled={!auth.enabled || auth.busy} onClick={auth.signIn} className="text-blue-300 underline-offset-2 hover:underline disabled:opacity-50">
-                Sign in
-              </button>
-            </>
-          )}
-        </li>
-        <li className={`rounded-lg border px-3 py-2 ${paid.payoutVerifiedAt ? 'border-emerald-900 bg-emerald-950/40 text-emerald-200' : 'border-white/10 text-slate-300'}`}>
-          {paid.payout && paid.payoutVerifiedAt ? (
-            <>✓ Paid to <span className="font-mono">{shortAddress(paid.payout)}</span> · proven by your signature </>
-          ) : (
-            <>Where should buyers pay you? Connect your Solana wallet and sign a short message. </>
-          )}
-          <button
-            type="button"
-            disabled={busy || !signer}
-            onClick={() => signer && run(() => verifyPayout(roomId, password, signer))}
-            className="text-blue-300 underline-offset-2 hover:underline disabled:opacity-50"
-          >
-            {paid.payoutVerifiedAt ? 'Change' : signer ? `Use ${signer.name}` : 'No wallet found'}
-          </button>
-        </li>
-        {!longEnough && (
-          <li className="rounded-lg border border-amber-800 bg-amber-950/40 px-3 py-2 text-amber-200">
-            A paid room must stay open at least {PAID_MIN_DAYS} days.{' '}
-            <button
-              type="button"
-              onClick={() => document.getElementById('plan-extend-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-              className="font-semibold text-blue-300 underline-offset-2 hover:underline"
-            >
-              Choose a plan
-            </button>
-          </li>
-        )}
-      </ol>
-
-      <div className="flex items-end gap-2">
-        <label className="flex flex-col gap-1.5 text-xs font-semibold text-slate-300">
-          Price (USD)
-          <input
-            value={priceText}
-            inputMode="decimal"
-            aria-label="Price in USD"
-            onChange={e => setPriceText(e.target.value)}
-            className="h-10 w-28 rounded-[10px] border border-violet-600 bg-[#020617] px-3 font-mono text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-violet-500/60"
-          />
-        </label>
-        <button
-          type="button"
-          disabled={busy || !price || price === paid.price}
-          onClick={() => price && save({ price })}
-          className="h-10 rounded-[10px] border border-white/10 px-3 text-xs font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-40"
-        >
-          Save price
-        </button>
-      </div>
-      {split && <p className="text-[11px] text-slate-400">You receive {formatAmount(split.owner)} per sale · DropHere fee {formatAmount(split.fee)}</p>}
-
-      <fieldset className="m-0 flex flex-col gap-2 border-0 p-0 text-xs text-slate-200">
-        <legend className="mb-1.5 p-0 text-xs font-bold">Free before paying</legend>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" aria-label="Show file names and sizes" checked={paid.previewNames} disabled={busy} onChange={e => save({ previewNames: e.target.checked })} className="h-4 w-4 accent-violet-500" />
-          Show file names and sizes
-        </label>
-        {rootFiles.map(f => (
+  const previews = (
+    <fieldset className="m-0 flex flex-col gap-2 border-0 p-0 text-xs text-slate-200">
+      <legend className="mb-1.5 p-0 text-xs font-bold">Free before paying</legend>
+      <label className="flex items-center gap-2">
+        <input type="checkbox" aria-label="Show file names and sizes" checked={paid.previewNames} disabled={busy} onChange={e => save({ previewNames: e.target.checked })} className="h-4 w-4 accent-violet-500" />
+        Show file names and sizes
+      </label>
+      {rootFiles.length === 0 ? (
+        <p className="text-[11px] text-slate-400">Upload files to choose some as free previews.</p>
+      ) : (
+        rootFiles.map(f => (
           <label key={f.filename} className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -307,35 +284,178 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
             />
             <span className="min-w-0 truncate">{f.filename} · free preview</span>
           </label>
-        ))}
-      </fieldset>
-
-      {error && (
-        <p role="alert" className="rounded-lg border border-red-500/40 bg-red-950/30 px-3 py-2 text-xs text-red-200">
-          {error}
-        </p>
+        ))
       )}
+    </fieldset>
+  );
 
-      <div className="flex items-center gap-2 border-t border-white/10 pt-3">
-        <p className="flex-1 text-xs text-slate-300">
-          Sales · {state.totals.count} · you received <span className="font-mono text-emerald-300">{formatAmount(state.totals.received)}</span>
-        </p>
-        {state.totals.count > 0 && (
-          <button type="button" onClick={downloadCsv} className="h-8 rounded-lg border border-white/10 px-2.5 text-[11px] font-semibold text-slate-200 hover:bg-white/5">
-            Export CSV
-          </button>
+  const errorLine = error && (
+    <p role="alert" className="rounded-lg border border-red-500/40 bg-red-950/30 px-3 py-2 text-xs text-red-200">
+      {error}
+    </p>
+  );
+
+  // --- Info: (20261122 - Luphia) 販售中：暫停開關、售價、免費預覽、銷售紀錄 ---
+  if (paid.enabled) {
+    return (
+      <section aria-label="Paid access" className="flex flex-col gap-3 rounded-[14px] border border-violet-800 p-3.5">
+        <ToggleSwitch
+          id="paid-access"
+          label="Selling access to this room"
+          description="Visitors pay you directly · 10% DropHere fee · turn off to pause sales"
+          checked
+          disabled={busy}
+          onChange={enabled => save({ enabled })}
+        />
+        {priceField}
+        {previews}
+        {errorLine}
+        <div className="flex items-center gap-2 border-t border-white/10 pt-3">
+          <p className="flex-1 text-xs text-slate-300">
+            {state.totals.count} {state.totals.count === 1 ? 'sale' : 'sales'} · you received <span className="font-mono text-emerald-300">{formatAmount(state.totals.received)} USDC/USDT</span>
+          </p>
+          {state.totals.count > 0 && (
+            <button type="button" onClick={downloadCsv} className="h-8 rounded-lg border border-white/10 px-2.5 text-[11px] font-semibold text-slate-200 hover:bg-white/5">
+              Export CSV
+            </button>
+          )}
+        </div>
+        {state.sales.length > 0 && (
+          <ul className="flex flex-col text-[11px]">
+            {state.sales.slice(0, 8).map(sale => (
+              <li key={sale.signature} className="flex items-center gap-2 border-t border-white/5 py-1.5">
+                <span className="min-w-0 flex-1 truncate text-slate-300">{sale.buyerName ?? shortAddress(sale.payer)}</span>
+                <span className="font-mono text-emerald-300">{formatAmount(sale.owner)} {sale.token}</span>
+                <TxLink signature={sale.signature} />
+              </li>
+            ))}
+          </ul>
         )}
+      </section>
+    );
+  }
+
+  // --- Info: (20261122 - Luphia) 尚未販售：沒有在建立時選擇收費的房間先收合 ---
+  if (!paid.setupPending && !expanded) {
+    return (
+      <section aria-label="Paid access" className="flex items-center gap-3 rounded-[14px] border border-white/10 p-3.5">
+        <p className="min-w-0 flex-1 text-[13px] text-slate-200">
+          Charge for access
+          <span className="block text-[11px] text-slate-400">Visitors pay you directly in USDC or USDT · 10% DropHere fee</span>
+        </p>
+        <button type="button" onClick={() => setExpanded(true)} className="h-9 shrink-0 rounded-lg border border-violet-600 px-3 text-xs font-semibold text-violet-100 hover:bg-violet-950">
+          Set up
+        </button>
+      </section>
+    );
+  }
+
+  const steps = [kycOk, longEnough, payoutOk, !!price && price >= MIN_ACCESS_PRICE];
+  const firstOpen = steps.findIndex(done => !done);
+  const stepState = (i: number): TStepState => (steps[i] ? 'done' : i === firstOpen ? 'current' : 'todo');
+  const ready = firstOpen === -1;
+
+  return (
+    <section aria-label="Paid access" className="flex flex-col gap-3 rounded-[14px] border border-violet-800 p-3.5">
+      <div>
+        <h3 className="text-[13px] font-bold text-slate-100">Set up paid access</h3>
+        <p className="text-[11px] text-slate-400">Visitors pay you directly in USDC or USDT on Solana · 10% DropHere fee</p>
       </div>
-      {state.sales.length > 0 && (
-        <ul className="flex flex-col text-[11px]">
-          {state.sales.slice(0, 8).map(sale => (
-            <li key={sale.signature} className="flex items-center gap-2 border-t border-white/5 py-1.5">
-              <span className="min-w-0 flex-1 truncate text-slate-300">{sale.buyerName ?? shortAddress(sale.payer)}</span>
-              <span className="font-mono text-emerald-300">{formatAmount(sale.owner)}</span>
-              <TxLink signature={sale.signature} />
-            </li>
-          ))}
-        </ul>
+      <ol className="flex flex-col gap-2">
+        <SetupStep n={1} state={stepState(0)} title="Verify your ID with CAFECA">
+          {kycOk ? (
+            <p className="text-xs text-emerald-300">Signed in{seller.handle ? ` as @${seller.handle}` : ''} · ID verified</p>
+          ) : (
+            <>
+              <p className="text-xs text-slate-300">{seller.signedIn ? `Your account needs ID verification (level ${seller.required}). Verify in CAFECA, then sign in again.` : 'Sign in with an ID-verified CAFECA account.'}</p>
+              <button type="button" disabled={!auth.enabled || auth.busy} onClick={auth.signIn} className="h-9 self-start rounded-lg bg-violet-600 px-3 text-xs font-bold text-white hover:bg-violet-500 disabled:opacity-50">
+                {seller.signedIn ? 'Sign in again' : 'Sign in with CAFECA'}
+              </button>
+            </>
+          )}
+        </SetupStep>
+
+        <SetupStep n={2} state={stepState(1)} title={`Keep the room open ${PAID_MIN_DAYS}+ days`}>
+          {longEnough ? (
+            <p className="text-xs text-emerald-300">Open until {settings.expiresAt ? formatDate(settings.expiresAt) : 'no end date'}</p>
+          ) : extend.phase === 'paid' ? (
+            <p className="text-xs text-emerald-300">Extended · updating…</p>
+          ) : (
+            <>
+              <p className="text-xs text-slate-300">
+                Buyers need time to use what they paid for. Extend {minPlan.days} days for {formatAmount(minPlan.price).replace(/\.00$/, '')} {extendToken}.
+              </p>
+              <TokenToggle value={extendToken} onChange={t => {
+                  setExtendToken(t);
+                  extend.reset();
+                  setShowQr(false);
+                }} disabled={extending} />
+              <WalletButtons
+                wallets={wallets}
+                disabled={extending || stepState(1) !== 'current'}
+                label={w => `Extend ${minPlan.days} days · ${formatAmount(minPlan.price).replace(/\.00$/, '')} ${extendToken}${wallets.length > 1 ? ` · ${w.name}` : ''}`}
+                onPay={wallet => extend.payWith(wallet, { kind: 'extend', planId: minPlan.id, token: extendToken })}
+              />
+              <PhoneQr
+                invoice={extend.invoice}
+                showing={showQr}
+                onShow={async () => {
+                  setShowQr(true);
+                  if (!extend.invoice || phaseIsStale(extend.phase)) await extend.start({ kind: 'extend', planId: minPlan.id, token: extendToken });
+                }}
+              />
+              <PayStatus phase={extend.phase} error={extend.error} invoice={extend.invoice} now={now} />
+            </>
+          )}
+        </SetupStep>
+
+        <SetupStep n={3} state={stepState(2)} title="Choose the wallet that receives payments">
+          {payoutOk && paid.payout && <p className="text-xs text-emerald-300">Paid to Solana address <span className="font-mono">{shortAddress(paid.payout)}</span> · proven by your signature</p>}
+          {(!payoutOk || stepState(2) === 'current') && (
+            <p className="text-xs text-slate-300">Pick a Solana wallet and sign a short message to prove the address is yours. Money goes straight there — DropHere never holds it.</p>
+          )}
+          {signers.length === 0 ? (
+            <p className="text-xs text-amber-200">No Solana wallet in this browser. Install Phantom, Solflare or Backpack, or turn on Solana in MetaMask.</p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {signers.map(wallet => (
+                <button
+                  key={wallet.name}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => run(() => verifyPayout(roomId, password, wallet))}
+                  className={`flex h-9 items-center gap-2 rounded-lg px-3 text-xs font-semibold disabled:opacity-50 ${payoutOk ? 'border border-white/10 text-slate-200 hover:bg-white/5' : 'bg-violet-600 text-white hover:bg-violet-500'}`}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  {wallet.icon && <img src={wallet.icon} alt="" className="h-4 w-4 rounded" />}
+                  {payoutOk ? `Change to ${wallet.name}` : wallet.name}
+                  <span className="rounded bg-black/30 px-1 text-[10px] font-normal">Solana</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </SetupStep>
+
+        <SetupStep n={4} state={stepState(3)} title="Set your price">
+          {priceField}
+        </SetupStep>
+      </ol>
+
+      {previews}
+      {errorLine}
+
+      <button
+        type="button"
+        disabled={!ready || busy}
+        onClick={() => save({ enabled: true })}
+        className="h-11 rounded-xl bg-violet-600 text-sm font-bold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
+      >
+        {ready ? `Start selling · ${price ? formatAmount(price) : ''} USDC or USDT` : `Start selling · ${steps.filter(Boolean).length} of 4 steps done`}
+      </button>
+      {!paid.setupPending && (
+        <button type="button" onClick={() => setExpanded(false)} className="self-center text-[11px] text-slate-400 hover:text-slate-200">
+          Not now
+        </button>
       )}
     </section>
   );
