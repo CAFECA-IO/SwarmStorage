@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import type { ILariaMetadata } from '@/lib/file_operator';
 import type { IRoomSettings } from '@/lib/room_store';
 import { memberHeaders } from '@/lib/member';
 import { useAuth } from '@/lib/use_auth';
 import { canSignMessage, useSolanaWallets } from '@/lib/solana_wallet';
 import { fetchSeller, updateSeller, usePayment, verifyPayout, type ISellerState } from '@/lib/pay_client';
-import { DAY_MS, GB, MIN_ACCESS_PRICE, PAID_MIN_DAYS, ROOM_PLANS, formatAmount, parseAmount, shortAddress, splitAccessPrice, type TPayToken } from '@/lib/pay_plans';
-import { PayStatus, PhoneQr, TokenToggle, TxLink, WalletButtons } from '@/components/pay_widgets';
+import { DAY_MS, GB, MIN_ACCESS_PRICE, PAID_MIN_DAYS, ROOM_PLANS, formatAmount, parseAmount, shortAddress, splitAccessPrice, PAY_TOKEN } from '@/lib/pay_plans';
+import { PayStatus, PhoneQr, TxLink, WalletButtons } from '@/components/pay_widgets';
 import ToggleSwitch from '@/components/toggle_switch';
 
 /**
  * Info: (20261120 - Luphia)
- * 延長房間 C：側欄的「Plan」分頁 (所有人都可以替房間延長)
+ * 延長房間與付費進房 (房間設定對話框的「Plan & storage」與「Sell access」；所有人都可以替房間延長)
  * - 目前方案、剩餘時間與容量；30 天 / 90 天 / 1 年方案；瀏覽器錢包或手機掃碼付款 (平台代付手續費)
  * - 房主：付費進房設定 (價格、免費預覽、收款地址、CAFECA 實名) 與銷售紀錄
  */
@@ -37,11 +38,18 @@ interface IRoomPlanPanelProps {
   onChanged: () => void;
 }
 
-export default function RoomPlanPanel({ roomId, password, settings, files, now, onChanged }: IRoomPlanPanelProps) {
+// Info: (20261124 - Luphia) section：'plan' 只顯示方案與延長；'sell' 只顯示付費進房 (房主)
+export default function RoomPlanPanel(props: IRoomPlanPanelProps & { section: 'plan' | 'sell' }) {
+  const { section, ...rest } = props;
+  return section === 'sell' ? <SellerSection {...rest} /> : <PlanSection {...rest} />;
+}
+
+const token = PAY_TOKEN;
+
+function PlanSection({ roomId, password, settings, now, onChanged }: IRoomPlanPanelProps) {
   const pay = settings.pay;
   const wallets = useSolanaWallets();
   const [planId, setPlanId] = useState('90d');
-  const [token, setToken] = useState<TPayToken>('USDC');
   const [showQr, setShowQr] = useState(false);
   const payment = usePayment(roomId, password, onChanged);
   const plan = ROOM_PLANS.find(p => p.id === planId) ?? ROOM_PLANS[1];
@@ -52,9 +60,8 @@ export default function RoomPlanPanel({ roomId, password, settings, files, now, 
   const capacity = pay?.plan.capacityBytes ?? 0;
   const warn = left !== null && left < 24 * 3600 * 1000;
 
-  const choose = (next: { planId?: string; token?: TPayToken }) => {
+  const choose = (next: { planId?: string }) => {
     if (next.planId) setPlanId(next.planId);
-    if (next.token) setToken(next.token);
     payment.reset();
     setShowQr(false);
   };
@@ -64,7 +71,7 @@ export default function RoomPlanPanel({ roomId, password, settings, files, now, 
   };
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div className="flex flex-col gap-4">
       <section
         aria-label="Current plan"
         className={`rounded-[14px] border p-3.5 ${warn ? 'border-amber-800 bg-amber-950/40' : 'border-white/10 bg-[#0B1222]'}`}
@@ -118,8 +125,7 @@ export default function RoomPlanPanel({ roomId, password, settings, files, now, 
               </button>
             ))}
           </div>
-          <TokenToggle value={token} onChange={t => choose({ token: t })} disabled={working} />
-          <p className="text-[11px] text-emerald-300">Prices in USDC or USDT on Solana · network fee paid by DropHere</p>
+          <p className="text-[11px] text-emerald-300">Paid in USDC on Solana · network fee paid by DropHere</p>
           <WalletButtons
             wallets={wallets}
             disabled={working}
@@ -134,7 +140,6 @@ export default function RoomPlanPanel({ roomId, password, settings, files, now, 
         </section>
       )}
 
-      {settings.isOwner && pay?.enabled && <SellerSection roomId={roomId} password={password} settings={settings} files={files} now={now} onChanged={onChanged} />}
     </div>
   );
 }
@@ -173,8 +178,7 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
   const [priceNote, setPriceNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [extendToken, setExtendToken] = useState<TPayToken>('USDC');
+  const extendToken = PAY_TOKEN;
   const [showQr, setShowQr] = useState(false);
   const extend = usePayment(roomId, password, onChanged);
   const minPlan = ROOM_PLANS.find(p => p.days >= PAID_MIN_DAYS) ?? ROOM_PLANS[0];
@@ -253,7 +257,7 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
           }}
           className="h-10 w-28 rounded-[10px] border border-violet-600 bg-[#020617] px-3 font-mono text-base font-bold text-white focus:outline-none focus:ring-2 focus:ring-violet-500/60"
         />
-        USDC or USDT
+        USDC
         {priceNote && <span className="text-emerald-300">✓ {priceNote}</span>}
       </label>
       <p className="text-[11px] text-slate-400">
@@ -312,11 +316,19 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
           onChange={enabled => save({ enabled })}
         />
         {priceField}
+        {paid.payout && (
+          <p className="text-[11px] text-slate-400">
+            Paid to <span className="font-mono text-slate-200">{shortAddress(paid.payout)}</span> <span className="text-emerald-300">✓ proven by your signature</span>
+          </p>
+        )}
         {previews}
         {errorLine}
         <div className="flex items-center gap-2 border-t border-white/10 pt-3">
           <p className="flex-1 text-xs text-slate-300">
-            {state.totals.count} {state.totals.count === 1 ? 'sale' : 'sales'} · you received <span className="font-mono text-emerald-300">{formatAmount(state.totals.received)} USDC/USDT</span>
+            {state.totals.count} {state.totals.count === 1 ? 'sale' : 'sales'} · you received <span className="font-mono text-emerald-300">{formatAmount(state.totals.received)} USDC</span>
+            <Link href="/earnings" className="ml-2 font-semibold text-blue-300 hover:underline">
+              All rooms →
+            </Link>
           </p>
           {state.totals.count > 0 && (
             <button type="button" onClick={downloadCsv} className="h-8 rounded-lg border border-white/10 px-2.5 text-[11px] font-semibold text-slate-200 hover:bg-white/5">
@@ -339,21 +351,6 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
     );
   }
 
-  // --- Info: (20261122 - Luphia) 尚未販售：沒有在建立時選擇收費的房間先收合 ---
-  if (!paid.setupPending && !expanded) {
-    return (
-      <section aria-label="Paid access" className="flex items-center gap-3 rounded-[14px] border border-white/10 p-3.5">
-        <p className="min-w-0 flex-1 text-[13px] text-slate-200">
-          Charge for access
-          <span className="block text-[11px] text-slate-400">Visitors pay you directly in USDC or USDT · 10% DropHere fee</span>
-        </p>
-        <button type="button" onClick={() => setExpanded(true)} className="h-9 shrink-0 rounded-lg border border-violet-600 px-3 text-xs font-semibold text-violet-100 hover:bg-violet-950">
-          Set up
-        </button>
-      </section>
-    );
-  }
-
   const steps = [kycOk, longEnough, payoutOk, !!price && price >= MIN_ACCESS_PRICE];
   const firstOpen = steps.findIndex(done => !done);
   const stepState = (i: number): TStepState => (steps[i] ? 'done' : i === firstOpen ? 'current' : 'todo');
@@ -363,7 +360,7 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
     <section aria-label="Paid access" className="flex flex-col gap-3 rounded-[14px] border border-violet-800 p-3.5">
       <div>
         <h3 className="text-[13px] font-bold text-slate-100">Set up paid access</h3>
-        <p className="text-[11px] text-slate-400">Visitors pay you directly in USDC or USDT on Solana · 10% DropHere fee</p>
+        <p className="text-[11px] text-slate-400">Visitors pay you directly in USDC on Solana · 10% DropHere fee</p>
       </div>
       <ol className="flex flex-col gap-2">
         <SetupStep n={1} state={stepState(0)} title="Verify your ID with CAFECA">
@@ -389,11 +386,6 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
               <p className="text-xs text-slate-300">
                 Buyers need time to use what they paid for. Extend {minPlan.days} days for {formatAmount(minPlan.price).replace(/\.00$/, '')} {extendToken}.
               </p>
-              <TokenToggle value={extendToken} onChange={t => {
-                  setExtendToken(t);
-                  extend.reset();
-                  setShowQr(false);
-                }} disabled={extending} />
               <WalletButtons
                 wallets={wallets}
                 disabled={extending || stepState(1) !== 'current'}
@@ -454,13 +446,8 @@ function SellerSection({ roomId, password, settings, files, now, onChanged }: IR
         onClick={() => save({ enabled: true })}
         className="h-11 rounded-xl bg-violet-600 text-sm font-bold text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:bg-slate-800 disabled:text-slate-500"
       >
-        {ready ? `Start selling · ${price ? formatAmount(price) : ''} USDC or USDT` : `Start selling · ${steps.filter(Boolean).length} of 4 steps done`}
+        {ready ? `Start selling · ${price ? formatAmount(price) : ''} USDC` : `Start selling · ${steps.filter(Boolean).length} of 4 steps done`}
       </button>
-      {!paid.setupPending && (
-        <button type="button" onClick={() => setExpanded(false)} className="self-center text-[11px] text-slate-400 hover:text-slate-200">
-          Not now
-        </button>
-      )}
     </section>
   );
 }

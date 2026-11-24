@@ -60,7 +60,7 @@ export async function PATCH(
     const now = Date.now();
     const soldRecently = (access.config.paid?.lastSaleAt ?? 0) + PAID_MIN_DAYS * DAY_MS > now;
     if ('minutes' in patch && ((access.config.plan && access.config.plan.until > now) || access.config.paid?.enabled || soldRecently)) {
-      return jsonFail(ApiCode.VALIDATION_ERROR, 'This room’s time comes from a paid plan or paid access. Extend it in the Plan tab instead.');
+      return jsonFail(ApiCode.VALIDATION_ERROR, 'This room’s time comes from a paid plan or paid access. Extend it in Plan & storage instead.');
     }
     if (access.config.paid?.enabled && patch.uploadPolicy === 'everyone') {
       return jsonFail(ApiCode.VALIDATION_ERROR, 'Only the owner can upload to a paid room');

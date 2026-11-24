@@ -227,7 +227,7 @@ function SummaryCards({ data }: { data: IEarnings }) {
       <div className="col-span-2 rounded-2xl border border-emerald-500/30 bg-emerald-950/40 p-4 lg:col-span-1">
         <p className="text-xs text-emerald-300">You received</p>
         <p className="mt-1.5 text-[28px] font-bold leading-8 tabular-nums text-white">
-          {formatAmount(totals.received)} <span className="text-sm font-semibold text-emerald-300">USDC/T</span>
+          {formatAmount(totals.received)} <span className="text-sm font-semibold text-emerald-300">USDC</span>
         </p>
         <p className="mt-1 text-xs text-slate-400">{diff === null ? 'Since your first sale' : `${diff >= 0 ? '+' : '−'}${formatAmount(Math.abs(diff))} vs the ${data.range === '30d' ? '30' : '90'} days before`}</p>
       </div>

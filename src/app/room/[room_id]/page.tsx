@@ -13,9 +13,8 @@ export default function RoomPage() {
   const initialPassword = searchParams.get('pwd') || undefined;
   // Info: (20261105 - Luphia) ?file= 直接開啟指定檔案 (Copy link 產生的連結)
   const initialFile = searchParams.get('file') || undefined;
-  // Info: (20261122 - Luphia) ?setup=paid：剛建立的收費房，直接開啟 Plan 分頁完成設定
-  // Info: (20261122 - Luphia) ?panel=plan：從收入頁或通知的「延長」連結進來
-  const initialPanel = searchParams.get('setup') === 'paid' || searchParams.get('panel') === 'plan' ? 'plan' : undefined;
+  // Info: (20261124 - Luphia) 進房時開啟房間設定：?setup=paid (剛建立的收費房) → Sell access；?panel=plan (收入頁或通知的「延長」) → Plan & storage
+  const initialPanel = searchParams.get('setup') === 'paid' ? 'sell' : searchParams.get('panel') === 'plan' ? 'plan' : undefined;
 
   if (!roomId) {
     return <div className="p-8 text-center text-slate-500">Invalid Room ID</div>;

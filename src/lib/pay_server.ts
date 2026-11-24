@@ -10,12 +10,11 @@ import { INVOICE_TTL_MS, TOKEN_DECIMALS, formatAmount, type IPublicInvoice, type
  * Solana 收款 (伺服器端)：帳單、組交易 (平台代付手續費)、以 reference 在鏈上找付款並驗證
  * - 帳單存於 DROPHERE_DATA_DIR/payments (需持久化)；每筆交易簽章只能使用一次
  * - 設定：SOLANA_RPC_URL、PAY_TREASURY (平台收款地址)、PAY_FEE_PAYER_SECRET (代付手續費的錢包私鑰)
- *   測試或 devnet 可用 PAY_USDC_MINT / PAY_USDT_MINT 覆寫幣種地址
+ *   測試或 devnet 可用 PAY_USDC_MINT 覆寫 USDC 地址 (只收 USDC)
  */
 
 const MAINNET_MINTS: Record<TPayToken, string> = {
   USDC: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-  USDT: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
 };
 const RPC_URL = process.env.SOLANA_RPC_URL?.trim() || 'https://api.mainnet-beta.solana.com';
 const PAY_DIR = path.join(DROPHERE_DATA_DIR, 'payments');
@@ -39,7 +38,7 @@ export class PayError extends Error {}
 
 // --- Info: (20261122 - Luphia) SPL Token 指令 (自行組裝，不使用 @solana/spl-token，避免帶入有安全通報的 bigint-buffer) ---
 
-// Info: (20261122 - Luphia) USDC / USDT 都使用原本的 Token Program (不是 Token-2022)
+// Info: (20261122 - Luphia) USDC 使用原本的 Token Program (不是 Token-2022)
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 

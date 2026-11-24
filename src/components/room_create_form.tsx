@@ -30,7 +30,7 @@ interface IRoomCreateFormProps {
 /**
  * Info: (20261106 - Luphia)
  * 建立房間表單：名稱、誰可以上傳、下載、是否公開、密碼、保存時間
- * Info: (20261122 - Luphia) 付款功能開啟時可選擇收費 (需要 CAFECA 實名)；建立後在 Plan 分頁完成設定
+ * Info: (20261122 - Luphia) 付款功能開啟時可選擇收費 (需要 CAFECA 實名)；建立後在房間設定的 Sell access 完成設定
  */
 export default function RoomCreateForm({ variant, onCreated, onCancel }: IRoomCreateFormProps) {
   const [name, setName] = useState('');
@@ -222,7 +222,7 @@ export default function RoomCreateForm({ variant, onCreated, onCancel }: IRoomCr
       <ToggleSwitch
         id={`${idPrefix}-charge`}
         label="Charge for access"
-        description="Visitors pay you in USDC or USDT on Solana · 90% to you, 10% DropHere fee"
+        description="Visitors pay you in USDC on Solana · 90% to you, 10% DropHere fee"
         checked={charge}
         onChange={setCharge}
       />
@@ -255,7 +255,7 @@ export default function RoomCreateForm({ variant, onCreated, onCancel }: IRoomCr
             </p>
           )}
           <p className="text-[11px] leading-5 text-slate-400">
-            After creating, finish in the room’s Plan tab: keep the room at least {PAID_MIN_DAYS} days (from {formatAmount(cheapest.price).replace(/\.00$/, '')} USDC), add the Solana address that receives your payments, then turn sales on. Only you can add files to a paid room.
+            After creating, finish in Room settings → Sell access: keep the room at least {PAID_MIN_DAYS} days (from {formatAmount(cheapest.price).replace(/\.00$/, '')} USDC), add the Solana address that receives your payments, then turn sales on. Only you can add files to a paid room.
           </p>
         </>
       )}

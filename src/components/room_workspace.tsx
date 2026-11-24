@@ -19,7 +19,7 @@ import {
 } from '@/lib/file_types';
 import { formatBytes } from '@/lib/utils';
 import { ApiCode } from '@/lib/status';
-import { ClockIcon, LockIcon, VideoIcon, XIcon } from '@/components/icons';
+import { ClockIcon, GearIcon, LockIcon, VideoIcon, XIcon } from '@/components/icons';
 import { RoomAudioRenderer, RoomContext } from '@livekit/components-react';
 import { CallJoinPanel, CallMiniBar, CallStage } from '@/components/room_call';
 import { useRoomCall } from '@/lib/use_room_call';
@@ -28,15 +28,14 @@ import FileInspector, { type IRepairState } from '@/components/file_inspector';
 import RoomChat from '@/components/room_chat';
 import RoomActivity from '@/components/room_activity';
 import PdfFitDialog, { defaultFitSettings } from '@/components/pdf_fit_dialog';
-import PayCheckoutPage from '@/components/pay_checkout_page';
-import RoomPlanPanel from '@/components/room_plan_panel';
+import PayUnlockDialog from '@/components/pay_unlock_dialog';
+import RoomSettingsDialog, { settingsSections, type TSettingsSection } from '@/components/room_settings_dialog';
 import PdfFitEditor from '@/components/pdf_fit_editor';
 import PdfFitJobCard from '@/components/pdf_fit_job_card';
 import { fetchAnalysis, startFit, stopFit, usePdfFitJobs, type IFitSettings } from '@/lib/pdf_fit_client';
 import type { IPdfAnalysis } from '@/lib/pdf_fit_plan';
 import dynamic from 'next/dynamic';
 import { isDocument, NEW_DOC_TEMPLATE } from '@/lib/doc_settings';
-import RoomSettingsPanel from '@/components/room_settings_panel';
 import AccountButton from '@/components/account_button';
 import { refreshOwnerNotices } from '@/lib/use_owner_notices';
 import type { IFileAction } from '@/components/file_actions_menu';
@@ -55,7 +54,8 @@ interface IRoomWorkspaceProps {
   initialPassword?: string;
   initialFile?: string;
   // Info: (20261122 - Luphia) 進房時開啟的側欄分頁 (建立收費房後直接到 Plan 完成設定)
-  initialPanel?: 'plan';
+  // Info: (20261124 - Luphia) 進房時開啟房間設定的分類 (plan：延長；sell：剛建立的收費房)
+  initialPanel?: 'plan' | 'sell';
   onExit: () => void;
 }
 
@@ -75,7 +75,7 @@ const GROUP_ORDER: TFileGroup[] = ['documents', 'media', 'other'];
 // Info: (20261106 - Luphia) 刪除後可復原的時間 (與伺服器 DELETE_UNDO_MS 相同)
 const DELETE_UNDO_MS = 10000;
 
-type TSidePanelTab = 'details' | 'chat' | 'settings' | 'plan';
+type TSidePanelTab = 'details' | 'chat';
 
 interface IToast {
   id: string;
@@ -142,7 +142,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
   const [downloading, setDownloading] = useState<Record<string, boolean>>({});
   const [linkCopied, setLinkCopied] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
-  const [inspectorOpen, setInspectorOpen] = useState(initialPanel === 'plan');
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [settings, setSettings] = useState<IRoomSettings | null>(null);
   // Info: (20261105 - Luphia) 伺服器時間 - 本機時間，修正時鐘誤差
   const [clockOffset, setClockOffset] = useState(0);
@@ -166,8 +166,11 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
     touched: boolean;
   } | null>(null);
   const [fitStarting, setFitStarting] = useState(false);
-  // Info: (20261120 - Luphia) 付費房結帳頁：沒買的人進房時開啟，付款後按 Open the room 才關閉
-  const [inCheckout, setInCheckout] = useState(false);
+  // Info: (20261124 - Luphia) 房間設定對話框 (齒輪按鈕)：開啟的分類，null 表示關閉 (section null = 手機版先列出分類)
+  const [settingsDialog, setSettingsDialog] = useState<{ section: TSettingsSection | null } | null>(initialPanel ? { section: initialPanel } : null);
+  // Info: (20261124 - Luphia) 付費房解鎖對話框：沒買的人第一次進房時自動開啟一次，之後從橫幅或鎖住的檔案開啟
+  const [unlockOpen, setUnlockOpen] = useState(false);
+  const [unlockOffered, setUnlockOffered] = useState(false);
   const [pendingDrop, setPendingDrop] = useState<{
     entries: IPathedFile[];
     folders: { name: string; original: string; count: number; size: number }[];
@@ -181,7 +184,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
   // Info: (20261105 - Luphia) 聊天：通過密碼驗證後才連線
   const [chatEnabled, setChatEnabled] = useState(false);
   const [chatPassword, setChatPassword] = useState<string | null>(null);
-  const [sideTab, setSideTab] = useState<TSidePanelTab>(initialPanel ?? 'details');
+  const [sideTab, setSideTab] = useState<TSidePanelTab>('details');
   const [seenMessages, setSeenMessages] = useState(0);
 
   const viewerRef = useRef<IHtmlViewerHandle>(null);
@@ -481,8 +484,11 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
     (name: string) => {
       const meta = filesRef.current.find(f => f.filename === name);
       if (!meta) return;
-      // Info: (20261120 - Luphia) 付費房沒買：檔案沒有分片，無法開啟
-      if ((meta as ILariaMetadata & { locked?: boolean }).locked) return;
+      // Info: (20261120 - Luphia) 付費房沒買：檔案沒有分片，無法開啟 → 開啟解鎖對話框
+      if ((meta as ILariaMetadata & { locked?: boolean }).locked) {
+        setUnlockOpen(true);
+        return;
+      }
       // Info: (20261105 - Luphia) 沒有開啟檔案時側欄顯示聊天；開啟檔案後切到 Details，視為已讀
       if (!activeNameRef.current) setSeenMessages(othersCountRef.current);
       setDoc(null);
@@ -988,7 +994,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
       pushToast({ message: 'Only the room owner can add files here.', tone: 'error' });
       return;
     }
-    // Info: (20261120 - Luphia) 容量不足：提示延長房間 (Plan 分頁)
+    // Info: (20261120 - Luphia) 容量不足：提示延長房間 (房間設定的 Plan & storage)
     const pay = settings.pay;
     const adding = collected.files.reduce((sum, entry) => sum + entry.file.size, 0);
     if (pay && pay.usedBytes + adding > pay.plan.capacityBytes) {
@@ -997,7 +1003,7 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
         {
           message: `Not enough space: ${gb(adding)} to add, ${gb(Math.max(0, pay.plan.capacityBytes - pay.usedBytes))} free. Extend the room for more space.`,
           tone: 'error',
-          ...(pay.enabled ? { actionLabel: 'Plan', onAction: () => { setInspectorOpen(true); setSideTab('plan'); } } : {}),
+          ...(pay.enabled ? { actionLabel: 'Extend', onAction: () => setSettingsDialog({ section: 'plan' }) } : {}),
         },
         8000
       );
@@ -1120,24 +1126,20 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
     });
     return result;
   }, [files, loads]);
-  const lockedOut = settings?.pay?.access === 'locked' && !isOwner;
-  if (lockedOut && !inCheckout) setInCheckout(true);
+  const lockedOut = settings?.pay?.access === 'locked' && !isOwner && !!settings.pay.paid;
+  if (lockedOut && !unlockOffered) {
+    setUnlockOffered(true);
+    setUnlockOpen(true);
+  }
+  const canOpenSettings = !!settings && settingsSections(settings).length > 0;
+  const openSettings = () => setSettingsDialog({ section: null });
   const expiresAt = settings?.expiresAt ?? null;
   const expiryText = settings && now > 0 && expiresAt ? formatRemaining(expiresAt - (now + clockOffset)) : null;
 
   const activeFile = files?.find(f => f.filename === activeName) || null;
   const activeKind = activeFile ? getFileKind(activeFile.filename, activeFile.mimeType) : null;
   const activeOutline = activeName ? outlines[activeName] || [] : [];
-  const sidePanelTab: TSidePanelTab =
-    sideTab === 'settings' && isOwner
-      ? 'settings'
-      : sideTab === 'plan' && settings?.pay?.enabled
-        ? 'plan'
-        : activeFile
-          ? sideTab === 'settings' || sideTab === 'plan'
-            ? 'details'
-            : sideTab
-          : 'chat';
+  const sidePanelTab: TSidePanelTab = activeFile ? sideTab : 'chat';
   const unreadMessages = sidePanelTab === 'chat' ? 0 : Math.max(0, othersMessageCount - seenMessages);
 
   const switchSidePanel = (tab: TSidePanelTab) => {
@@ -1429,21 +1431,6 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
         />
       );
     }
-    // Info: (20261120 - Luphia) 付費房沒買：結帳頁 (B)；付款後停在「進房」步驟，直到按下 Open the room
-    if (inCheckout && settings?.pay?.paid) {
-      return (
-        <PayCheckoutPage
-          roomId={roomId}
-          password={chatPassword}
-          settings={settings}
-          files={files || []}
-          onDownloadFree={handleDownload}
-          onUnlocked={() => {
-            refreshRoom(chatPassword || undefined).then(() => setInCheckout(false));
-          }}
-        />
-      );
-    }
     if (fit?.view === 'editor' && fit.analysis) {
       return (
         <PdfFitEditor
@@ -1505,14 +1492,9 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
           onToggleWatch={toggleWatch}
           onOpenFile={openFile}
           jobs={fitJobCards}
-          onExtend={
-            settings?.pay?.enabled && settings.pay.access === 'full'
-              ? () => {
-                  setInspectorOpen(true);
-                  switchSidePanel('plan');
-                }
-              : undefined
-          }
+          onExtend={settings?.pay?.enabled && settings.pay.access === 'full' ? () => setSettingsDialog({ section: 'plan' }) : undefined}
+          onOpenSettings={canOpenSettings ? openSettings : undefined}
+          locked={lockedOut ? { price: settings?.pay?.paid?.price ?? 0, onUnlock: () => setUnlockOpen(true) } : undefined}
         />
       );
     }
@@ -1687,6 +1669,17 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
           Chat
           {unreadBadge}
         </button>
+        {canOpenSettings && (
+          <button
+            type="button"
+            onClick={openSettings}
+            aria-label="Room settings"
+            title="Room settings"
+            className="flex h-10 w-10 items-center justify-center rounded-lg border border-white/10 text-slate-200"
+          >
+            <GearIcon className="h-[18px] w-[18px]" />
+          </button>
+        )}
       </div>
 
       <nav
@@ -1844,28 +1837,6 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
               <span className="ml-1.5 font-normal text-slate-400">{chat.status === 'connected' ? chat.online : ''}</span>
               {unreadBadge}
             </button>
-            {settings?.pay?.enabled && settings.pay.access === 'full' && (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sidePanelTab === 'plan'}
-                onClick={() => switchSidePanel('plan')}
-                className={`-mb-px h-10 border-b-2 px-3 text-xs font-semibold ${sidePanelTab === 'plan' ? 'border-blue-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
-              >
-                Plan
-              </button>
-            )}
-            {isOwner && (
-              <button
-                type="button"
-                role="tab"
-                aria-selected={sidePanelTab === 'settings'}
-                onClick={() => switchSidePanel('settings')}
-                className={`-mb-px h-10 border-b-2 px-3 text-xs font-semibold ${sidePanelTab === 'settings' ? 'border-blue-500 text-white' : 'border-transparent text-slate-400 hover:text-slate-200'}`}
-              >
-                Settings
-              </button>
-            )}
           </div>
           {inspectorOpen && (
             <button
@@ -1900,20 +1871,41 @@ export default function RoomWorkspace({ roomId, initialPassword, initialFile, in
               onDelete={() => handleDelete(activeFile.filename)}
             />
           </div>
-        ) : sidePanelTab === 'plan' && settings ? (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <RoomPlanPanel roomId={roomId} password={chatPassword} settings={settings} files={files || []} now={now + clockOffset} onChanged={() => refreshRoom(chatPassword || undefined)} />
-          </div>
-        ) : sidePanelTab === 'settings' && settings ? (
-          <div className="min-h-0 flex-1 overflow-y-auto">
-            <RoomSettingsPanel key={settings.name} settings={settings} saving={settingsSaving} error={settingsError} onChange={handleSettingsChange} />
-          </div>
         ) : (
           <div className="min-h-0 flex-1">
             <RoomChat chat={chat} showHeader={false} />
           </div>
         )}
       </aside>
+
+      {settingsDialog && settings && canOpenSettings && (
+        <RoomSettingsDialog
+          roomId={roomId}
+          password={chatPassword}
+          settings={settings}
+          files={files || []}
+          now={now + clockOffset}
+          saving={settingsSaving}
+          error={settingsError}
+          initialSection={settingsDialog.section}
+          onChange={handleSettingsChange}
+          onChanged={() => refreshRoom(chatPassword || undefined)}
+          onClose={() => setSettingsDialog(null)}
+        />
+      )}
+      {/* Info: (20261124 - Luphia) 付款完成後房間權限變成 full，對話框仍留著顯示「進房」直到按下 Open the room */}
+      {unlockOpen && settings?.pay?.paid && !isOwner && (
+        <PayUnlockDialog
+          roomId={roomId}
+          password={chatPassword}
+          settings={settings}
+          files={files || []}
+          onUnlocked={() => {
+            refreshRoom(chatPassword || undefined).then(() => setUnlockOpen(false));
+          }}
+          onClose={() => setUnlockOpen(false)}
+        />
+      )}
 
       {(toasts.length > 0 || zipJob) && (
         <div className="fixed bottom-4 left-4 z-50 flex w-[min(340px,calc(100vw-2rem))] flex-col gap-2" role="status" aria-live="polite">

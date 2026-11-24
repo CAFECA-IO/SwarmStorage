@@ -1,13 +1,15 @@
 /**
  * Info: (20261120 - Luphia)
- * 付款共用設定 (瀏覽器與伺服器共用)：Solana 上的 USDC / USDT，延長房間方案、付費房抽成
+ * 付款共用設定 (瀏覽器與伺服器共用)：Solana 上的 USDC，延長房間方案、付費房抽成
  * - 延長房間：付給平台；付費進房：同一筆交易 90% 給房主、10% 給平台
  * - Solana 網路手續費由平台代付 (平台為 fee payer)
  */
 
-export type TPayToken = 'USDC' | 'USDT';
-export const PAY_TOKENS: TPayToken[] = ['USDC', 'USDT'];
-// Info: (20261120 - Luphia) 兩種穩定幣在 Solana 上都是 6 位小數
+// Info: (20261124 - Luphia) 只收 USDC (不再支援 USDT；舊的 USDT 銷售紀錄仍保留原幣種)
+export type TPayToken = 'USDC';
+export const PAY_TOKEN: TPayToken = 'USDC';
+export const PAY_TOKENS: TPayToken[] = [PAY_TOKEN];
+// Info: (20261120 - Luphia) USDC 在 Solana 上是 6 位小數
 export const TOKEN_DECIMALS = 6;
 export const MICRO = 1_000_000;
 

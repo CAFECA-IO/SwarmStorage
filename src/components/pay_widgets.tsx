@@ -1,32 +1,13 @@
 import { QRCodeSVG } from 'qrcode.react';
 import type { Wallet } from '@wallet-standard/base';
-import { PAY_TOKENS, formatAmount, type TPayToken } from '@/lib/pay_plans';
+import { formatAmount, type TPayToken } from '@/lib/pay_plans';
 import type { TInvoiceView, TPayPhase } from '@/lib/pay_client';
 import { explorerTx } from '@/lib/pay_client';
 
 /**
  * Info: (20261120 - Luphia)
- * 付款共用元件：幣種切換、錢包按鈕、手機掃碼 (Solana Pay)、付款狀態
+ * 付款共用元件：錢包按鈕、手機掃碼 (Solana Pay)、付款狀態
  */
-
-export function TokenToggle({ value, onChange, disabled }: { value: TPayToken; onChange: (token: TPayToken) => void; disabled?: boolean }) {
-  return (
-    <div role="group" aria-label="Pay with" className="grid grid-cols-2 gap-[3px] rounded-[10px] border border-white/10 bg-[#0B1222] p-[3px]">
-      {PAY_TOKENS.map(token => (
-        <button
-          key={token}
-          type="button"
-          aria-pressed={value === token}
-          disabled={disabled}
-          onClick={() => onChange(token)}
-          className={`h-9 rounded-[7px] text-[13px] font-semibold disabled:opacity-60 ${value === token ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'}`}
-        >
-          {token}
-        </button>
-      ))}
-    </div>
-  );
-}
 
 export function WalletButtons({
   wallets,

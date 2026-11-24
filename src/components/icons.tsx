@@ -262,3 +262,41 @@ export const WalletIcon = noticeIcon(
     <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
   </>
 );
+
+// Info: (20261124 - Luphia) 房間設定 (齒輪按鈕與設定分類)
+export const GearIcon = noticeIcon(
+  <>
+    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+    <circle cx="12" cy="12" r="3" />
+  </>
+);
+export const SlidersIcon = noticeIcon(
+  <>
+    <path d="M4 21v-7" />
+    <path d="M4 10V3" />
+    <path d="M12 21v-9" />
+    <path d="M12 8V3" />
+    <path d="M20 21v-5" />
+    <path d="M20 12V3" />
+    <path d="M2 14h4" />
+    <path d="M10 8h4" />
+    <path d="M18 16h4" />
+  </>
+);
+export const KeyIcon = noticeIcon(
+  <>
+    <circle cx="7.5" cy="15.5" r="4.5" />
+    <path d="m10.7 12.3 9.3-9.3" />
+    <path d="m16 7 3 3" />
+    <path d="m19 4 2 2" />
+  </>
+);
+export const BoxIcon = noticeIcon(
+  <>
+    <path d="M21 8 12 3 3 8v8l9 5 9-5z" />
+    <path d="m3 8 9 5 9-5" />
+    <path d="M12 13v8" />
+  </>
+);
+export const ChevronRightIcon = noticeIcon(<path d="m9 18 6-6-6-6" />);
+export const ChevronLeftIcon = noticeIcon(<path d="m15 18-6-6 6-6" />);

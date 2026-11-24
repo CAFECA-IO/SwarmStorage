@@ -12,7 +12,7 @@ export const runtime = 'nodejs';
 
 /**
  * Info: (20261120 - Luphia) POST /api/v1/pay/invoice
- * body: { roomId, kind: 'extend' | 'access', planId?, token: 'USDC' | 'USDT' }
+ * body: { roomId, kind: 'extend' | 'access', planId?, token?: 'USDC' } (只收 USDC)
  * 開一張帳單 (延長房間付給平台；付費進房 90% 給房主、10% 給平台)
  */
 export async function POST(request: NextRequest) {

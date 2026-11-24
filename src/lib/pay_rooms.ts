@@ -4,7 +4,7 @@ import { announceRoomSettings, broadcastRoomEvent, updateRoomTokenExpiry } from 
 import { publicSettings } from '@/lib/room_store';
 import { applyExtension, applyPurchase, hasContentAccess, onSale } from '@/lib/room_paid';
 import { createInvoice, ensureWatching, onInvoicePaid, payConfig, pendingCountFor, type IInvoice } from '@/lib/pay_server';
-import { PAY_TOKENS, planById, splitAccessPrice, type TPayToken } from '@/lib/pay_plans';
+import { PAY_TOKEN, PAY_TOKENS, planById, splitAccessPrice, type TPayToken } from '@/lib/pay_plans';
 import { emitOwner } from '@/lib/owner_earnings';
 
 /**
@@ -62,8 +62,9 @@ export async function openInvoice(
   const pay = payConfig();
   if (!pay) return fail('unavailable', 'Payments are not available on this server');
   await ensureWatching();
-  const token = PAY_TOKENS.includes(body.token as TPayToken) ? (body.token as TPayToken) : null;
-  if (!token) return fail('invalid', 'Choose USDC or USDT');
+  // Info: (20261124 - Luphia) 只收 USDC；沒有指定幣種時預設 USDC
+  const token = body.token === undefined ? PAY_TOKEN : PAY_TOKENS.includes(body.token as TPayToken) ? (body.token as TPayToken) : null;
+  if (!token) return fail('invalid', 'Payments are accepted in USDC only');
   if (pendingCountFor(buyer.memberHash) >= MAX_PENDING_PER_MEMBER) return fail('conflict', 'Too many open payment requests; finish or wait for one to expire');
   const treasury = pay.treasury.toBase58();
 

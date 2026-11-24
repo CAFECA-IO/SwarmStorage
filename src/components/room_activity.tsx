@@ -6,7 +6,8 @@ import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import Link from 'next/link';
 import FileActionsMenu, { type IFileAction } from '@/components/file_actions_menu';
 import RoomSharePanel from '@/components/room_share_panel';
-import { ShareIcon, UploadIcon } from '@/components/icons';
+import { GearIcon, LockIcon, ShareIcon, UploadIcon } from '@/components/icons';
+import { formatAmount } from '@/lib/pay_plans';
 import { BundleUploadCard, ColumnBrowser, etaOf, FolderCard, LiveDot, motionText, percentOf, UploadControls, uploadFraction, type IUploadControl } from '@/components/folder_browser';
 import { useUploadMotion } from '@/lib/use_upload_motion';
 import { storedCount, type IUnfinishedUpload } from '@/lib/upload_resume';
@@ -339,8 +340,12 @@ interface IRoomActivityProps {
   canDownloadFile: (file: ILariaMetadata) => boolean;
   // Info: (20261120 - Luphia) PDF 壓縮分割的工作卡片
   jobs?: React.ReactNode;
-  // Info: (20261122 - Luphia) 點到期時間付費延長 (開啟 Plan 分頁)；付款功能關閉時不提供
+  // Info: (20261122 - Luphia) 點到期時間付費延長 (開啟房間設定的 Plan & storage)；付款功能關閉時不提供
   onExtend?: () => void;
+  // Info: (20261124 - Luphia) 齒輪按鈕開啟房間設定；沒有可設定的項目時不提供
+  onOpenSettings?: () => void;
+  // Info: (20261124 - Luphia) 付費房沒買：解鎖橫幅
+  locked?: { price: number; onUnlock: () => void };
 }
 
 /**
@@ -389,6 +394,8 @@ export default function RoomActivity({
   canDownloadFile,
   jobs = null,
   onExtend,
+  onOpenSettings,
+  locked,
 }: IRoomActivityProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const uploading = uploads.filter(u => u.status === 'uploading').length;
@@ -446,7 +453,7 @@ export default function RoomActivity({
               </span>
               <span className="rounded-md bg-slate-800 px-2 py-1 text-slate-300">Delete your own files</span>
               {isOwner && <span className="rounded-md bg-blue-950 px-2 py-1 text-blue-200">You own this room</span>}
-              {/* Info: (20261122 - Luphia) 付款功能開啟時，點到期時間即可付費延長 (開啟 Plan 分頁) */}
+              {/* Info: (20261122 - Luphia) 付款功能開啟時，點到期時間即可付費延長 (開啟房間設定的 Plan & storage) */}
               {expiryText &&
                 (onExtend ? (
                   <button
@@ -500,8 +507,39 @@ export default function RoomActivity({
                 </button>
               </>
             )}
+            {locked && (
+              <button
+                type="button"
+                onClick={locked.onUnlock}
+                className="inline-flex h-10 items-center gap-2 rounded-xl bg-violet-600 px-4 text-[13px] font-semibold text-white hover:bg-violet-500"
+              >
+                <LockIcon className="h-4 w-4" />
+                Unlock · {formatAmount(locked.price)} USDC
+              </button>
+            )}
+            {onOpenSettings && (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                aria-label="Room settings"
+                title="Room settings"
+                className="hidden h-10 w-10 items-center justify-center rounded-xl border border-white/10 text-slate-200 hover:bg-white/5 lg:inline-flex"
+              >
+                <GearIcon className="h-[18px] w-[18px]" />
+              </button>
+            )}
           </div>
         </header>
+
+        {locked && (
+          <div className="flex flex-wrap items-center gap-3 rounded-xl border border-violet-700 bg-violet-950/60 px-4 py-3 text-[13px] text-violet-100" role="note">
+            <LockIcon className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1">This is a paid room. Unlock it to open and download everything; files marked free can be opened now.</span>
+            <button type="button" onClick={locked.onUnlock} className="font-semibold text-white underline-offset-2 hover:underline">
+              Unlock · {formatAmount(locked.price)} USDC
+            </button>
+          </div>
+        )}
 
         {shareOpen && (
           <div className="max-w-md">
@@ -621,6 +659,8 @@ export default function RoomActivity({
                 const timestamp = addedAt ?? file.uploadedAt;
                 const thumbnail = thumbnails[file.filename];
                 const mine = isMine(file);
+                // Info: (20261124 - Luphia) 付費房沒買：鎖住的檔案 (點了開啟解鎖對話框)
+                const isLocked = !!(file as ILariaMetadata & { locked?: boolean }).locked;
                 return (
                   <div
                     key={file.filename}
@@ -629,9 +669,14 @@ export default function RoomActivity({
                     <button
                       type="button"
                       onClick={() => onOpenFile(file.filename)}
-                      aria-label={`Open ${file.filename}`}
-                      className="flex h-[110px] w-full items-center justify-center overflow-hidden rounded-t-[14px] bg-slate-900"
+                      aria-label={isLocked ? `Unlock to open ${file.filename}` : `Open ${file.filename}`}
+                      className="relative flex h-[110px] w-full items-center justify-center overflow-hidden rounded-t-[14px] bg-slate-900"
                     >
+                      {isLocked && (
+                        <span className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-lg bg-violet-950/90 text-violet-200">
+                          <LockIcon className="h-3.5 w-3.5" />
+                        </span>
+                      )}
                       {thumbnail ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img src={thumbnail} alt="" className="h-full w-full object-cover" />
@@ -642,8 +687,10 @@ export default function RoomActivity({
                     <div className="flex items-center gap-2 px-3 py-2.5">
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] font-semibold text-slate-100">{file.filename}</p>
-                        <p className={`text-[11px] ${isNew ? 'text-emerald-300' : mine ? 'text-blue-300' : 'text-slate-400'}`}>
-                          {isNew
+                        <p className={`text-[11px] ${isLocked ? 'text-violet-300' : isNew ? 'text-emerald-300' : mine ? 'text-blue-300' : 'text-slate-400'}`}>
+                          {isLocked
+                            ? `Locked · ${formatBytes(file.originalFileSize)}`
+                            : isNew
                             ? `Ready · ${formatRelative(addedAt, now)}`
                             : `${uploaderLabel(file)} · ${timestamp && now ? `${formatRelative(timestamp, now)} · ` : ''}${formatBytes(file.originalFileSize)}`}
                         </p>
@@ -671,9 +718,16 @@ export default function RoomActivity({
                     <TypeTile filename={file.filename} kind={kind} />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-semibold text-slate-100">{file.filename}</span>
-                      <span className={`text-xs ${mine ? 'text-blue-300' : 'text-slate-400'}`}>
-                        {uploaderLabel(file)} · {formatBytes(file.originalFileSize)}
-                      </span>
+                      {(file as ILariaMetadata & { locked?: boolean }).locked ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-violet-300">
+                          <LockIcon className="h-3 w-3" />
+                          Locked · {formatBytes(file.originalFileSize)}
+                        </span>
+                      ) : (
+                        <span className={`text-xs ${mine ? 'text-blue-300' : 'text-slate-400'}`}>
+                          {uploaderLabel(file)} · {formatBytes(file.originalFileSize)}
+                        </span>
+                      )}
                     </span>
                   </SwipeRow>
                 );
